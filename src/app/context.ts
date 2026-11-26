@@ -9,6 +9,8 @@ export const masterPrompt = promptFile('orchestrator')
 export const workerPrompt = promptFile('worker')
 /** Review mode's fixed section, injected only while the Execution settings set the mode to review. */
 export const reviewPrompt = promptFile('review')
+/** Review-oriented system knowledge distilled from the team's architecture documentation, injected only in review mode. */
+export const reviewContextPrompt = promptFile('review-context')
 /** Built-in policy sections referenced by role prompts; a team may override them. */
 export const guides: Readonly<Record<string, string>> = Object.fromEntries(['subscriptions', 'replies', 'dispatch', 'work']
   .map(name => [name, promptFile(name)]))

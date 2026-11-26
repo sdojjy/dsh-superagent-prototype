@@ -514,6 +514,7 @@ const TEXT = {
   'promptPart.runtime/orchestrator': ['主 Session 角色', 'Main Session role'],
   'promptPart.runtime/worker': ['执行器角色', 'Executor role'],
   'promptPart.runtime/review': ['仅评审模式（只读）', 'Review mode (read only)'],
+  'promptPart.runtime/review-context': ['评审用系统知识', 'System context for reviews'],
   'promptPart.runtime/subscriptions': ['订阅', 'Subscriptions'],
   'promptPart.runtime/replies': ['回复与确认', 'Replies and acknowledgements'],
   'promptPart.runtime/dispatch': ['路由', 'Routing'],

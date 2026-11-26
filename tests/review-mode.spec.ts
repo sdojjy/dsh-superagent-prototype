@@ -206,7 +206,9 @@ describe('review-mode prompt section', () => {
       }
       // The section is a built-in part a team may override like any other.
       const preview = prompts.preview(config)
-      expect(preview.parts.worker.map(part => part.name)).toContain('runtime/review')
+      expect(preview.parts.worker.map(part => part.name)).toEqual(expect.arrayContaining(['runtime/review', 'runtime/review-context']))
+      expect(preview.parts.worker.findIndex(part => part.name === 'runtime/review-context')).toBe(
+        preview.parts.worker.findIndex(part => part.name === 'runtime/review') + 1)
       expect(preview.worker).toBe(prompts.compose(config, 'worker'))
     } finally { store.close() }
   })
