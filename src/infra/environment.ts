@@ -272,7 +272,9 @@ export async function writeEnvironment(deployment: Pick<Deployment, 'stateDir' |
     // Review mode refuses commits, pushes and rebases through the hooks, whatever a Session runs.
     ...mode === 'review' ? ['[core]', `\thooksPath = ${gitQuote(workerHooks(stateDir))}`] : [],
     '[credential]', '\thelper =',
-    '[credential "https://github.com"]', `\thelper = ${gitQuote(credentialHelper(github.cli))}`,
+    // The helper is the worker shim, not the bare CLI: the shim restores the operator's HOME for the account CLI, which review
+    // mode otherwise isolates away from the credentials `gh` needs to answer git.
+    '[credential "https://github.com"]', `\thelper = ${gitQuote(credentialHelper(join(workerBin(stateDir), 'gh')))}`,
     '[url "https://github.com/"]', '\tinsteadOf = git@github.com:', '\tinsteadOf = ssh://git@github.com/',
     // Include Git LFS filters because the operator's global gitconfig (which usually holds them) is ignored.
     '[filter "lfs"]', '\tclean = git-lfs clean -- %f', '\tsmudge = git-lfs smudge -- %f', '\tprocess = git-lfs filter-process', '\trequired = true',
@@ -303,7 +305,7 @@ export async function verifyEnvironment(deployment: Pick<Deployment, 'github' | 
   const { github, stateDir } = deployment
   // `-z` separates fields with NUL and never quotes paths.
   const helpers = (await runAsWorker(subprocess, ['git', 'config', '-z', '--show-origin', '--get-all', 'credential.https://github.com.helper'], stateDir, AbortSignal.any([signal, AbortSignal.timeout(60_000)])).catch(() => '')).split('\0')
-  if (helpers.join('\0') !== [`file:${workerGitConfig(stateDir)}`, credentialHelper(github.cli), ''].join('\0')) throw new SetupError('gitTooOld')
+  if (helpers.join('\0') !== [`file:${workerGitConfig(stateDir)}`, credentialHelper(join(workerBin(stateDir), 'gh')), ''].join('\0')) throw new SetupError('gitTooOld')
 }
 
 /**

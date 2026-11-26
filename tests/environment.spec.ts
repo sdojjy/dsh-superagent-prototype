@@ -84,7 +84,7 @@ describe('agent git configuration', () => {
     await git('init', '-q', 'repo')
     await exec('git', ['-C', 'repo', 'remote', 'add', 'origin', 'git@github.com:acme/widgets.git'], { cwd: dir, env })
     expect(await git('-C', 'repo', 'remote', 'get-url', '--push', 'origin')).toBe('https://github.com/acme/widgets.git')
-    expect(await git('config', '--show-origin', '--get-all', 'credential.https://github.com.helper')).toBe(`file:${workerGitConfig(dir)}\t${credentialHelper('/opt/agent tools/gh')}`)
+    expect(await git('config', '--show-origin', '--get-all', 'credential.https://github.com.helper')).toBe(`file:${workerGitConfig(dir)}\t${credentialHelper(join(workerBin(dir), 'gh'))}`)
     expect(await git('config', '--get-all', 'credential.helper')).toBe('')
     await expect(git('config', 'commit.gpgsign')).rejects.toThrow()
     await expect(git('config', 'core.abbrev')).rejects.toThrow()

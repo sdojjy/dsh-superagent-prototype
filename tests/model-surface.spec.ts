@@ -17,7 +17,7 @@ import { workerSessionId } from '../src/executor/dsh.ts'
 import { Store } from '../src/app/store.ts'
 import { Commands } from '../src/infra/commands.ts'
 import { inputMessage } from '../src/executor/dsh.ts'
-import { credentialHelper, workerGitConfig } from '../src/infra/environment.ts'
+import { credentialHelper, workerBin, workerGitConfig } from '../src/infra/environment.ts'
 import { IM_WORDS, NOTE_WORDS, checkedImText } from '../src/infra/text.ts'
 import { SettingsSchema } from '../src/policy.ts'
 import { feishuKind, feishuTrigger } from '../src/sources/feishu.ts'
@@ -84,9 +84,9 @@ async function start() {
     [`${BOT} auth status`]: JSON.stringify({ appId: 'cli_bot', brand: 'feishu', identities: { bot: { status: 'ready' } } }),
     [`${BOT} config strict-mode`]: 'strict-mode: bot (source: profile)',
     [`${BOT} api GET /open-apis/bot/v3/info --as bot --format ndjson`]: '{"bot":{"open_id":"ou_bot"},"code":0,"msg":"ok"}',
-    ['git config -z --show-origin --get-all credential.https://github.com.helper']: `file:${workerGitConfig(directory)}\0${credentialHelper(AGENT)}\0`,
+    ['git config -z --show-origin --get-all credential.https://github.com.helper']: `file:${workerGitConfig(directory)}\0${credentialHelper(join(workerBin(directory), 'gh'))}\0`,
     ['git config -z --show-scope --get-regexp ^(credential\\..*|http\\..*extraheader)$']:
-      `global\0credential.helper\n\0global\0credential.https://github.com.helper\n${credentialHelper(AGENT)}\0`,
+      `global\0credential.helper\n\0global\0credential.https://github.com.helper\n${credentialHelper(join(workerBin(directory), 'gh'))}\0`,
   }
   const reader = (text: string) => ({ readFrom: () => ({ text, nextOffset: text.length, lossy: false }) })
   const subprocess = { spawn: (spec: { argv: readonly string[] }) => {
