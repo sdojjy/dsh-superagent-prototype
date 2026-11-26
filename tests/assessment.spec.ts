@@ -19,7 +19,7 @@ function setup(strength: 'explicit' | 'inferred' = 'inferred', bodies = Array.fr
   const gate = { issue: undefined as Promise<void> | undefined }
   const commands = {
     repository: 'acme/widgets', deployment: testDeployment(),
-    withSignal() { return commands },
+    withSignal() { return commands }, forRepository() { return commands },
     gh: vi.fn(async (args: string[]) => {
       await gate.issue
       const number = Number(/issues\/(\d+)/.exec(args[1]!)?.[1])
@@ -59,8 +59,9 @@ function setup(strength: 'explicit' | 'inferred' = 'inferred', bodies = Array.fr
   const size = () => kept.evals.size
   return { repo, engine, assessor, tools, size, gate }
 }
-const issue = (n: number): Trigger => ({ id: `issue-${n}`, source: 'github', threads: [{ source: 'github', id: String(n) }], actor: { source: 'github', id: 'bob' }, human: true,
-  at: new Date(Date.UTC(2026, 8, 9, 0, 0, n)).toISOString(), text: `issue ${n}`, url: `https://github.com/acme/widgets/issues/${n}`, meta: { number: n } })
+const issue = (n: number): Trigger => ({ id: `issue-${n}`, source: 'github', threads: [{ source: 'github', id: `acme/widgets#${n}` }],
+  actor: { source: 'github', id: 'bob' }, human: true, at: new Date(Date.UTC(2026, 8, 9, 0, 0, n)).toISOString(), text: `issue ${n}`,
+  url: `https://github.com/acme/widgets/issues/${n}`, meta: { repo: 'acme/widgets', number: n } })
 const signal = new AbortController().signal
 
 it('keeps nothing for an Eval once it is decided, as for one that timed out', async () => {
@@ -75,7 +76,7 @@ it('keeps nothing for an Eval once it is decided, as for one that timed out', as
   }
   s.engine.receive(issue(9)); s.engine.evaluateDue()
   await s.assessor.context('issue-9', signal)
-  const thread = s.repo.threads.get('github:9')!
+  const thread = s.repo.threads.get('github:acme/widgets#9')!
   s.repo.threads.save({ ...thread, expired: 2, evaluating: { ...thread.evaluating!, delivered: '2000-01-01T00:00:00.000Z', deadline: '2000-01-01T00:00:00.000Z' } })
   s.engine.evaluateDue()
   expect(s.size()).toBe(0)

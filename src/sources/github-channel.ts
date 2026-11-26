@@ -1,7 +1,7 @@
 /** GitHub outbound channel: posts issue/PR comments and review thread replies under the agent account. */
 import { z } from 'zod'
 import type { OutboundMessage } from '../core/index.ts'
-import { CliError } from '../infra/commands.ts'
+import { CliError, type Commands } from '../infra/commands.ts'
 import { sameName } from '../infra/text.ts'
 import type { SourceContext } from './host.ts'
 import type { ChannelLink, ChannelLinks } from './kind.ts'
@@ -16,8 +16,11 @@ const gone = (error: unknown): boolean => error instanceof CliError
 const missing = (error: unknown): boolean => error instanceof CliError && (error.code === 404 || error.code === 410)
 /** Posts a comment or review-thread reply with an embedded HTML marker so retries do not create duplicate comments. */
 export async function sendGithub(host: Pick<SourceContext, 'commands'>, message: OutboundMessage): Promise<'sent' | 'gone'> {
-  const { commands } = host
-  const { repository, github } = commands.deployment
+  const { github } = host.commands.deployment
+  // The reply address names the repository the Trigger came from; replies queued before multi-repository support fall back to the first.
+  const repository = message.channel.address.repo ?? host.commands.deployment.repositories[0] ?? ''
+  let commands: Commands
+  try { commands = host.commands.forRepository(repository) } catch { return 'gone' }
   const number = Number(message.channel.address.number)
   if (!number) throw new Error('Missing GitHub reply target')
   try {
@@ -45,8 +48,10 @@ export async function sendGithub(host: Pick<SourceContext, 'commands'>, message:
 }
 export function githubLink(address: Record<string, string>, links: ChannelLinks): ChannelLink {
   const number = address.number ?? ''
-  const review = !!links.repository && !!githubAddress(address.url ?? '', links.repository)?.discussion
-  return { url: address.url ?? (links.repository ? githubPage(links.repository, Number(number)) : ''),
+  // A Channel address names its repository; links for older addresses use the first configured one.
+  const repository = address.repo ?? links.repository
+  const review = !!repository && !!githubAddress(address.url ?? '', repository)?.discussion
+  return { url: address.url ?? (repository ? githubPage(repository, Number(number)) : ''),
     label: review ? { zh: `GitHub #${number} 的 review 讨论`, en: `Review discussion on GitHub #${number}` }
       : { zh: `GitHub #${number}`, en: `GitHub #${number}` } }
 }

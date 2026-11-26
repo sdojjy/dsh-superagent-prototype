@@ -141,9 +141,9 @@ it('lists the unavailable Evals one by one, without the health entry that counts
 
 it('says when no Source is on, an Eval is past its deadline or a message keeps failing, each with the way to it', async () => {
   for (const kind of ['feishu', 'github']) server.settings.sources[kind] = { ...server.settings.sources[kind]!, enabled: false }
-  server.threads = [threadSummary({ key: 'github:9', title: '#9 迟迟未决', stage: 'evaluating',
+  server.threads = [threadSummary({ key: 'github:acme/widgets#9', title: '#9 迟迟未决', stage: 'evaluating',
     evaluating: { id: 'v9', triggers: 1, strength: 'inferred', startedAt: '2026-08-31T23:58:00Z', deadline: '2026-09-01T00:00:00Z' } })]
-  server.failing = [{ id: 'm1', channel: { source: 'github', thread: 'github:42', address: { number: '42' } },
+  server.failing = [{ id: 'm1', channel: { source: 'github', thread: 'github:acme/widgets#42', address: { number: '42' } },
     text: '已修复', attempts: 4,
     error: 'HTTP 502 from GitHub' }]
   await mount()
@@ -155,5 +155,5 @@ it('says when no Source is on, an Eval is past its deadline or a message keeps f
   expect(document.querySelector('.dt-settings-link[aria-current="page"]')?.textContent).toBe(zh['settingsGroup.source'])
   await click(tab(zh['tab.overview']))
   await click('评估超时未决定：#9 迟迟未决')
-  expect(server.requests.some(request => request.path.startsWith('threads/github:9'))).toBe(true)
+  expect(server.requests.some(request => request.path.startsWith('threads/github:acme/widgets#9'))).toBe(true)
 })

@@ -54,17 +54,32 @@ function membership(error: unknown): unknown {
 }
 /**
  * Executes gh, lark-cli, and git subprocesses with deployment account credentials, timeouts, and abort signals.
- * Restricts GitHub API calls to the configured repository and translates CLI failures into CliError instances for Sources, MasterAssessor, Outbox, and Settings.
+ * Restricts GitHub API calls to the configured repositories and translates CLI failures into CliError instances for Sources, MasterAssessor, Outbox, and Settings.
  */
 export class Commands {
   /**
    * @param resolved - returns the resolved deployment setup, or throws while setup is still pending.
    * @param environment - variables overriding `process.env` for every command (such as isolated git settings).
+   * @param bound - the repository this instance's GitHub API calls address; omitted for the first configured repository.
    */
-  constructor(private readonly resolved: () => Deployment, private readonly environment: Record<string, string | undefined>, private readonly signal: AbortSignal) {}
+  constructor(private readonly resolved: () => Deployment, private readonly environment: Record<string, string | undefined>, private readonly signal: AbortSignal,
+    private readonly bound?: string) {}
   get deployment(): Deployment { return this.resolved() }
-  get repository(): string { return this.deployment.repository }
-  withSignal(signal?: AbortSignal): Commands { return signal ? new Commands(this.resolved, this.environment, AbortSignal.any([this.signal, signal])) : this }
+  /** The repository this instance's GitHub API calls address: the bound one, else the first configured repository. */
+  get repository(): string { return this.bound ?? this.deployment.repositories[0] ?? this.deployment.repository }
+  /** True when the deployment watches `repository`, compared as GitHub compares names. */
+  configured(repository: string): boolean { return this.deployment.repositories.some(name => name.toLowerCase() === repository.toLowerCase()) }
+  /**
+   * Returns these commands bound to another repository of the deployment, so `api`, `pages`, and `gh` address it.
+   * @throws for a repository the deployment does not watch, since no GitHub call may reach outside it.
+   */
+  forRepository(repository: string): Commands {
+    const canonical = this.deployment.repositories.find(name => name.toLowerCase() === repository.toLowerCase())
+    if (!canonical) throw new Error(`GitHub calls are restricted to the configured repositories: ${repository} is not one`)
+    return canonical === this.repository ? this : new Commands(this.resolved, this.environment, this.signal, canonical)
+  }
+  withSignal(signal?: AbortSignal): Commands { return signal ? new Commands(this.resolved, this.environment, AbortSignal.any([this.signal, signal]), this.bound) : this }
+  /** Runs `program` with `args`, returning its standard output. */
   async run(program: string, args: string[], cwd?: string): Promise<string> {
     try {
       const { stdout } = await exec(program, args, { cwd, signal: this.signal, timeout: TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024,
@@ -75,7 +90,7 @@ export class Commands {
   /** Runs the agent's GitHub CLI and parses its JSON output; callers should prefer `api`, which is restricted to the configured repository and validates output. */
   async gh<T>(args: string[]): Promise<T> { return JSON.parse(await this.run(this.deployment.github.cli, args)) as T }
   /**
-   * Calls the GitHub API on a path within the configured repository, validating JSON output when a schema is provided
+   * Calls the GitHub API on a path within this instance's repository, validating JSON output when a schema is provided
    * or returning raw CLI output (such as raw files or `--include` headers) when omitted.
    * @throws CliError with GitHub's HTTP status as `code` on failure.
    */
@@ -86,15 +101,38 @@ export class Commands {
     const [path = '', ...flags] = rest
     return schema.parse(await this.gh(['api', this.path(path), ...flags]))
   }
-  /** Fetches all pages of a GitHub API list within the configured repository, skipping items that fail schema validation. */
+  /** Fetches all pages of a GitHub API list within this instance's repository, skipping items that fail schema validation. */
   async pages<T>(item: z.ZodType<T>, path: string, tally?: Tally): Promise<T[]> {
     const pages = z.array(z.array(z.unknown())).parse(await this.gh(['api', this.path(path), '--paginate', '--slurp']))
+    return validItems(item, pages.flat(), tally)
+  }
+  /**
+   * Calls the GitHub API for the account rather than one of its repositories, such as `notifications`, with the same
+   * overloads as `api`.
+   */
+  async account<T>(schema: z.ZodType<T>, path: string, ...flags: string[]): Promise<T>
+  async account(path: string, ...flags: string[]): Promise<string>
+  async account<T>(schema: z.ZodType<T> | string, ...rest: string[]): Promise<T | string> {
+    if (typeof schema === 'string') return this.run(this.deployment.github.cli, ['api', this.accountPath(schema), ...rest])
+    const [path = '', ...flags] = rest
+    return schema.parse(await this.gh(['api', this.accountPath(path), ...flags]))
+  }
+  /** Fetches all pages of an account-level GitHub API list, skipping items that fail schema validation. */
+  async accountPages<T>(item: z.ZodType<T>, path: string, tally?: Tally): Promise<T[]> {
+    const pages = z.array(z.array(z.unknown())).parse(await this.gh(['api', this.accountPath(path), '--paginate', '--slurp']))
     return validItems(item, pages.flat(), tally)
   }
   private path(path: string): string {
     const outside = /^\/|^[a-z]+:|(^|\/)\.\.?(\/|\?|$)/i.test(path)
     if (outside) throw new Error('GitHub calls are restricted to the configured repository')
-    return path ? `repos/${this.repository}/${path}` : `repos/${this.repository}`
+    const repository = this.repository
+    if (!this.configured(repository)) throw new Error(`GitHub calls are restricted to the configured repositories: ${repository} is not one`)
+    return path ? `repos/${repository}/${path}` : `repos/${repository}`
+  }
+  private accountPath(path: string): string {
+    const outside = /^\/|^[a-z]+:|(^|\/)\.\.?(\/|\?|$)/i.test(path) || /^repos\//i.test(path)
+    if (outside) throw new Error('Account-level GitHub calls name no repository or escaping path')
+    return path
   }
   /**
    * Runs the Feishu bot's `lark-cli` and returns the JSON `data` payload.

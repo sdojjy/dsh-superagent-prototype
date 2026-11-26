@@ -42,16 +42,64 @@ export function machineOf(config: DeploymentConfig): Machine {
   return { stateDir, promptMaxChars, admissionContextMaxPages, admissionContextTimeoutMs }
 }
 
-export const GithubAccountsSchema = z.object({
-  repository: z.string().trim().regex(/^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)?$/, 'owner/name').default(''),
+/** The GitHub repositories the Source watches when its settings name none; the first is also the default repository. */
+export const DEFAULT_GITHUB_REPOSITORIES: readonly string[] = ['tidbcloud/serverless-service', 'tidbcloud/dataflow-service',
+  'tidbcloud/cluster-service-ng', 'tidbcloud/infra-provider']
+const REPOSITORY_NAME = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
+const LEGACY_REPOSITORY_NAME = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)?$/
+/** Splits a repository list written as text, by commas, semicolons, or whitespace. */
+const splitRepositories = (value: string): string[] => value.split(/[\s,;]+/).filter(Boolean)
+/**
+ * Normalizes configured repositories for code that reads stored settings directly (such as the migration and search):
+ * the legacy single `repository` first, then `repositories`, deduplicated case-insensitively, and the built-in list when empty.
+ * Entries are kept as written; validation happens in `GithubAccountsSchema`.
+ */
+export function configuredRepositories(value: { repositories?: unknown; repository?: unknown } | undefined): string[] {
+  const raw = value?.repositories
+  const listed = (Array.isArray(raw) ? raw : typeof raw === 'string' ? [raw] : [])
+    .flatMap(item => typeof item === 'string' ? splitRepositories(item) : [])
+  const legacy = typeof value?.repository === 'string' ? value.repository.trim() : ''
+  const names = [...legacy ? [legacy] : [], ...listed].filter(Boolean)
+  const unique = [...new Map(names.map(name => [name.toLowerCase(), name])).values()]
+  return unique.length ? unique : [...DEFAULT_GITHUB_REPOSITORIES]
+}
+/**
+ * GitHub Source account settings: `repositories`, the legacy single `repository` (kept readable so settings saved before
+ * multiple repositories still resolve), and `cli`. Both forms normalize to `repositories`, the legacy name first, defaulting
+ * to `DEFAULT_GITHUB_REPOSITORIES`; the legacy key is dropped so a later save stores only the list.
+ */
+export const GithubAccountsFields = z.object({
+  repositories: z.union([z.string(), z.array(z.string())]).optional(),
+  repository: z.string().trim().regex(LEGACY_REPOSITORY_NAME, 'owner/name').optional(),
   cli: z.string().trim().default(''),
 })
+/**
+ * Normalizes the GitHub Source's account fields: `repositories` is the legacy single repository first, then the list,
+ * deduplicated, defaulting to `DEFAULT_GITHUB_REPOSITORIES`; every name must be `owner/name`, and the legacy key is dropped.
+ * @param ctx - the schema refinement context that receives an issue for an invalid repository name.
+ */
+export function normalizeGithubAccounts<T extends { repositories?: unknown; repository?: string }>(value: T, ctx: z.RefinementCtx):
+Omit<T, 'repositories' | 'repository'> & { repositories: string[] } {
+  const repositories = configuredRepositories(value)
+  const invalid = repositories.filter(name => !REPOSITORY_NAME.test(name))
+  if (invalid.length) {
+    ctx.addIssue({ code: 'custom', message: `repositories must be owner/name: ${invalid.join(', ')}` })
+    return z.NEVER
+  }
+  const { repository: _legacy, repositories: _repositories, ...rest } = value
+  return { ...rest, repositories }
+}
+/** Validated GitHub Source settings, with `repositories` normalized to a non-empty list of `owner/name` names. */
+export const GithubAccountsSchema = GithubAccountsFields.transform(normalizeGithubAccounts)
 export const FeishuBotSchema = z.object({ cli: z.string().trim().default('') })
 /** Source configuration keys that affect deployment setup and trigger a restart when changed. */
-export const SETUP_FIELDS: Readonly<Record<string, readonly string[]>> = { github: Object.keys(GithubAccountsSchema.shape), feishu: Object.keys(FeishuBotSchema.shape) }
+export const SETUP_FIELDS: Readonly<Record<string, readonly string[]>> = { github: Object.keys(GithubAccountsFields.shape), feishu: Object.keys(FeishuBotSchema.shape) }
 
 export interface Deployment extends Machine {
+  /** The first configured repository, the one a Trigger without one of its own belongs to. */
   repository: string
+  /** Every configured repository as GitHub returns its canonical `full_name`, in configuration order. */
+  repositories: string[]
   github: { cli: string; login: string; noreply: string }
   feishu?: FeishuBot
 }
@@ -83,12 +131,12 @@ function parsed<T>(schema: z.ZodType<T>, text: string): T | undefined {
   const result = schema.safeParse(value)
   return result.success ? result.data : undefined
 }
-/** Verify the agent's GitHub CLI identity and push access to the configured repository. */
+/** Verify the agent's GitHub CLI identity and push access to every configured repository, naming the one that fails. */
 export async function resolveDeployment(machine: Machine, github: unknown, probe: Probe, path = process.env.PATH ?? ''): Promise<Deployment> {
   const { stateDir } = machine
   const accounts = GithubAccountsSchema.parse(github ?? {})
-  const remote = accounts.repository
-  if (!remote) throw new SetupError('repositoryUnset')
+  const configured = accounts.repositories
+  if (!configured.length) throw new SetupError('repositoryUnset')
   if (!accounts.cli) throw new SetupError('agentCliUnset')
   let cli: string
   try { cli = executable(accounts.cli, path, workerBin(stateDir)) } catch (error) { throw new SetupError('agentCliMissing', { output: reason(error) }) }
@@ -96,13 +144,19 @@ export async function resolveDeployment(machine: Machine, github: unknown, probe
   const agent = parsed(GithubUser, text)
   if (!agent) throw new SetupError('agentCliNoAccount')
   // Use the canonical repository name returned by GitHub so renamed repositories match incoming notifications.
-  const access = parsed(RepositoryAccess, await probe([cli, 'api', `repos/${remote}`, '--jq', '{name: .full_name, push: .permissions.push}']).catch((error: unknown) => {
-    throw new SetupError('repositoryUnreadable', { account: agent.login, repository: remote, output: reason(error) })
-  }))
-  if (!access) throw new SetupError('repositoryUnreported', { repository: remote })
-  const repository = access.name
-  if (access.push !== true) throw new SetupError('repositoryReadOnly', { account: agent.login, repository })
-  return { ...machine, repository, github: { cli, login: agent.login, noreply: `${agent.id}+${agent.login}@users.noreply.github.com` } }
+  const repositories: string[] = []
+  for (const remote of configured) {
+    const access = parsed(RepositoryAccess, await probe([cli, 'api', `repos/${remote}`, '--jq', '{name: .full_name, push: .permissions.push}']).catch((error: unknown) => {
+      throw new SetupError('repositoryUnreadable', { account: agent.login, repository: remote, output: reason(error) })
+    }))
+    if (!access) throw new SetupError('repositoryUnreported', { repository: remote })
+    if (access.push !== true) throw new SetupError('repositoryReadOnly', { account: agent.login, repository: access.name })
+    // Two configured names can be one renamed repository; keep the first canonical name.
+    if (!repositories.some(name => name.toLowerCase() === access.name.toLowerCase())) repositories.push(access.name)
+  }
+  if (!repositories.length) throw new SetupError('repositoryUnset')
+  return { ...machine, repository: repositories[0]!, repositories,
+    github: { cli, login: agent.login, noreply: `${agent.id}+${agent.login}@users.noreply.github.com` } }
 }
 
 const AuthStatus = z.object({ appId: z.string().regex(/^cli_[A-Za-z0-9]+$/), brand: z.enum(['feishu', 'lark']).default('feishu'), identities: z.object({ bot: z.object({ status: z.string() }) }) })
