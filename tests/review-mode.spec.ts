@@ -129,16 +129,21 @@ describe('review-mode isolation', () => {
     expect(review.GH_TOKEN).toBeUndefined()
     expect(review.GIT_CONFIG_GLOBAL).toBe(workerGitConfig(dir))
   })
-  it('lets the account CLIs keep the operator\'s HOME, so wrappers resolving their configuration through it work', async () => {
-    program(join(dir, 'gh-agent'), 'echo "HOME=$HOME"')
+  it('lets the account CLIs keep the operator\'s HOME and XDG bases, so a CLI finding its configuration there works', async () => {
+    // A base the operator never set must be unset, not left at the isolated value: gh reads XDG_CONFIG_HOME before HOME, so an
+    // isolated base sends it to an empty configuration and it reports itself signed out.
+    program(join(dir, 'gh-agent'), 'echo "HOME=$HOME XDG=${XDG_CONFIG_HOME-<unset>}"')
     const base = testDeployment()
-    program(join(dir, 'lark-bot'), 'echo "HOME=$HOME"')
+    program(join(dir, 'lark-bot'), 'echo "HOME=$HOME XDG=${XDG_CONFIG_HOME-<unset>}"')
     await writeEnvironment(deployment(), [], 'review')
-    const bin = workerBin(dir), env = { PATH: [bin, process.env.PATH ?? ''].join(':'), HOME: workerHome(dir) }
-    expect((await exec(join(bin, 'gh'), ['api', 'user'], { env }) as unknown as { stdout: string }).stdout.trim()).toBe(`HOME=${process.env.HOME}`)
+    const bin = workerBin(dir)
+    const env = { PATH: [bin, process.env.PATH ?? ''].join(':'), HOME: workerHome(dir), XDG_CONFIG_HOME: join(workerHome(dir), '.config') }
+    const operatorXdg = process.env.XDG_CONFIG_HOME ?? '<unset>'
+    const expected = `HOME=${process.env.HOME} XDG=${operatorXdg}`
+    expect((await exec(join(bin, 'gh'), ['api', 'user'], { env }) as unknown as { stdout: string }).stdout.trim()).toBe(expected)
     await writeEnvironment(testDeployment({ stateDir: dir, github: { ...base.github, cli: join(dir, 'gh-agent') },
       feishu: { ...base.feishu!, cli: join(dir, 'lark-bot') } }), [], 'review')
-    expect((await exec(join(bin, 'lark-cli'), ['im'], { env }) as unknown as { stdout: string }).stdout.trim()).toBe(`HOME=${process.env.HOME}`)
+    expect((await exec(join(bin, 'lark-cli'), ['im'], { env }) as unknown as { stdout: string }).stdout.trim()).toBe(expected)
   })
   it('leaves HOME and the connection variables as develop mode has them', () => {
     const develop = agentVariables(dir)

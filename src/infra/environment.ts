@@ -26,7 +26,13 @@ const OPERATOR_ENVIRONMENT: Readonly<Record<string, string | undefined>> = Objec
  */
 export const operatorEnvironment = (): Record<string, string | undefined> => ({ ...OPERATOR_ENVIRONMENT })
 /** The operator's environment as assignments, for a shell command that exports or prefixes them. */
-const operatorAssignments = (): [string, string][] => Object.entries(OPERATOR_ENVIRONMENT).filter((entry): entry is [string, string] => entry[1] !== undefined)
+const operatorAssignments = (): [string, string | undefined][] => Object.entries(OPERATOR_ENVIRONMENT)
+/**
+ * The operator's HOME and XDG bases as shell lines: a base the operator set is exported, and one the operator never set is
+ * unset. Exporting only the set ones is not enough, because review mode leaves its own isolated base in the environment and
+ * the account CLI would read the empty isolated configuration instead of the operator's.
+ */
+const operatorRestore = (): string[] => operatorAssignments().map(([name, value]) => value === undefined ? `unset ${name}` : `${name}=${shellQuote(value)}`)
 /** Markers of files written under the project's earlier names (`dsh-tag`, `dsh-go`, `dsh-freelancer`), which `dsh-superagent` owns and replaces too. */
 const LEGACY_MARKERS = ['dsh-tag', 'dsh-go', 'dsh-freelancer'].map(name => `# Written by ${name} on every start; edits are lost.`)
 /** Commands workers need, which `blockedCommands` cannot block: the shims and git. */
@@ -176,7 +182,7 @@ async function writeHooks(stateDir: string, mode: ExecutionMode): Promise<void> 
 const reviewGhBody = (preamble: string, cli: string): string => [
   preamble,
   // As with every review-mode shim, the CLI keeps reading the operator's configuration while the worker shell does not.
-  ...operatorAssignments().map(([name, value]) => `export ${name}=${shellQuote(value)}`),
+  ...operatorRestore().map(line => line.startsWith('unset ') ? line : `export ${line}`),
   'deny() {',
   `  echo "gh $*: ${GH_REFUSAL}" >&2`,
   '  exit 1',
@@ -249,8 +255,7 @@ export async function writeEnvironment(deployment: Pick<Deployment, 'stateDir' |
   const withoutShims = stripShimDirectory(dir)
   // Review mode isolates the worker shell's HOME; the account CLIs still read the operator's configuration, as before, so a
   // wrapper that resolves its configuration through HOME keeps working.
-  const cliEnvironment = mode === 'review'
-    ? operatorAssignments().map(([name, value]) => `${name}=${shellQuote(value)}`).join('\n') : ''
+  const cliEnvironment = mode === 'review' ? operatorRestore().join('\n') : ''
   const run = (program: string): string => [withoutShims, cliEnvironment, `exec ${shellQuote(program)} "$@"`].filter(Boolean).join('\n')
   const fail = (message: string): string => `echo ${shellQuote(message)} >&2\nexit 1`
   await shim('gh', mode === 'review' ? reviewGhBody(withoutShims, github.cli) : run(github.cli))
