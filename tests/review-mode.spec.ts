@@ -138,7 +138,7 @@ describe('review-mode isolation', () => {
     await writeEnvironment(deployment(), [], 'review')
     const bin = workerBin(dir)
     const env = { PATH: [bin, process.env.PATH ?? ''].join(':'), HOME: workerHome(dir), XDG_CONFIG_HOME: join(workerHome(dir), '.config') }
-    const operatorXdg = process.env.XDG_CONFIG_HOME ?? '<unset>'
+    const operatorXdg = process.env.XDG_CONFIG_HOME ?? `${process.env.HOME}/.config`
     const expected = `HOME=${process.env.HOME} XDG=${operatorXdg}`
     expect((await exec(join(bin, 'gh'), ['api', 'user'], { env }) as unknown as { stdout: string }).stdout.trim()).toBe(expected)
     await writeEnvironment(testDeployment({ stateDir: dir, github: { ...base.github, cli: join(dir, 'gh-agent') },

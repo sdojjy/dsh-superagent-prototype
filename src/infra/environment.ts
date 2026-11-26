@@ -5,6 +5,7 @@
  */
 import { access, chmod, lstat, mkdir, readdir, readFile, rename, rmdir, unlink, writeFile } from 'node:fs/promises'
 import { constants, realpathSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { delimiter, join, resolve } from 'node:path'
 import type { SubprocessOutputReader, SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
 import type { Deployment } from '../deployment.ts'
@@ -17,8 +18,13 @@ const MARKER = '# Written by dsh-superagent on every start; edits are lost.'
  * The operator's HOME and XDG bases as the process had them before dsh-superagent changed the environment, so host CLI calls
  * and the account wrappers keep reading the configuration the operator set up, while review-mode worker shells do not.
  */
+const OPERATOR_HOME = process.env.HOME ?? homedir()
 const OPERATOR_ENVIRONMENT: Readonly<Record<string, string | undefined>> = Object.freeze({
-  HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, XDG_CACHE_HOME: process.env.XDG_CACHE_HOME,
+  HOME: OPERATOR_HOME,
+  // Review mode's isolated bases stay in the host process environment, and a child that starts without these would inherit
+  // them and read an empty configuration; the operator's defaults are named outright instead.
+  XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME ?? join(OPERATOR_HOME, '.config'),
+  XDG_CACHE_HOME: process.env.XDG_CACHE_HOME ?? join(OPERATOR_HOME, '.cache'),
 })
 /**
  * The operator's HOME and XDG bases, for host commands and for the CLI a shim runs. A base the operator did not set is
