@@ -24,7 +24,7 @@ code, and use this document only to judge whether code fits the system it lives 
   independent Go modules with no cross-imports (root = Dedicated, `dataflow-service-ng` = Premium/Essential-V2,
   `dataflow-agent-ng` = per-pool dataplane agent), so a change in one module cannot rely on another's internals.
 
-## 2. The four repositories under review
+## 2. The five repositories under review
 
 ### 2.1 `tidbcloud/dataflow-service`
 
@@ -84,6 +84,22 @@ code, and use this document only to judge whether code fits the system it lives 
 - Dynamic Crossplane provisioning for Premium SharedPools lives in `cluster-service-ng/internal/dataplane-manager`,
   **not** here: treat "infra-provider is the Crossplane provisioning repo" as `[unverified]` and check the
   module path before assuming which layer a change affects.
+
+### 2.5 `tidbcloud/tidb-management-service`
+
+- The **global control plane for every tier**, in one Go repository with two long-lived lines: `main` serves the next-gen
+  (Premium) path as `tidb-mgmt-portal` (gRPC-Gateway BFF), `tidb-mgmt-service` (portal-level validation, DB row, internal
+  DAG submission) and `nextgen-global-service` (the premium business logic and the nine-step `create_cluster` DAG);
+  the serverless/essential line serves Starter as `serverless-global-service` and the regional `serverless-regional-service`
+  together with `serverless-svc` workers, sharing the same repo history.
+- Two orchestration layers live here: `fastflow` DAGs (internal, submitted by the portal layer) and business DAGs (submitted
+  by the global service). A step change here is a cross-tier contract change because it calls `cluster-service-ng` over gRPC
+  and the regional service over HTTP.
+- Post-create work (extra setup SQL through ClusterProxy, encrypted-password cleanup, backup setting, status transitions,
+  metering metadata) is easy to break in a way no unit test catches, because it depends on the regional side finishing first.
+- Essential and Premium share helpers in this repository (billing facade, account relations, config center, cluster event
+  consumption). A change under a shared package affects both tiers even when the diff looks premium-only; check the import
+  path before deciding the blast radius.
 
 ## 3. End-to-end flows a diff must line up with
 
