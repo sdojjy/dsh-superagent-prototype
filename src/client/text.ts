@@ -7,9 +7,15 @@ import type { Health } from '../sources/host.ts'
 import { reasonText, type Reason } from '../core/reasons.ts'
 
 export type T = Translate<DshSuperagentKey>
+/**
+ * The interface language of the copy this module picks by hand: `en` only when DSH itself runs in English, and `zh` for Chinese
+ * and for every other locale (a language pack without its own `dshSuperagent` dictionary), so Chinese is the default rather
+ * than a language with no words. DSH owns the preference itself (Settings › General); the panel reads it, it does not set it.
+ */
+export const uiLanguage = (t: T): 'zh' | 'en' => t('lang') === 'en' ? 'en' : 'zh'
 export const errorText = (failure: unknown): string => failure instanceof Error ? failure.message : String(failure)
 export const localized = (t: T, text: Localized | string | undefined): string =>
-  typeof text === 'string' ? text : text ? text[t('lang') === 'en' ? 'en' : 'zh'] : ''
+  typeof text === 'string' ? text : text ? text[uiLanguage(t)] : ''
 export const actorName = (t: T, actor: { name?: Localized } | undefined): string => actor?.name ? localized(t, actor.name)
   : t('automatedNotice')
 export function valueLabel(t: T, group: string, key: string | undefined): string {
@@ -41,6 +47,7 @@ export function readableMarkers(t: T, text: string): string {
     .replace(/\[Media: [^\]]*\]/g, t('mediaMarker')).replace(/\[Merged forward\]/g, t('forwardMarker'))
     .replace(/@_user_\d+/g, t('unknownMention'))
 }
+/** Dates and relative times follow the interface language: English dates only in English, Chinese dates everywhere else. */
 const timeLocale = (lang: string) => lang === 'en' ? 'en' : 'zh-CN'
 export function when(value: string | undefined, lang: string): string {
   if (!value) return ''
