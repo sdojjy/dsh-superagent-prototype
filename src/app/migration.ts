@@ -1,13 +1,17 @@
 /**
- * Migrates a schema 10 database to schema 11 in a single transaction so runtime readers never convert legacy shapes.
+ * Migrates a schema 10, 11 or 12 database to the current schema in a single transaction so runtime readers never convert
+ * legacy shapes: schema 11 reshapes the domain records, schema 12 gives GitHub Threads the repository they belong to, and
+ * schema 13 adds the team's custom prompt section to saved prompt versions.
  * Databases older than schema 10 are rejected: this version cannot migrate them.
  */
 import { basename } from 'node:path'
 import { z } from 'zod'
 import { isoTime, said, type AcceptMode, type AdmissionCell, type ChannelRef, type Decision, type Execution, type Follow, type MandateBasis,
-  type Reason, type Thread, type Ticket, type TicketInput, type TriggerDisposition } from '../core/index.ts'
+  type Reason, type Thread, type Ticket, type TicketInput, type Trigger, type TriggerDisposition } from '../core/index.ts'
 import { feishuChatLink } from '../sources/feishu-channel.ts'
 import { POLL_HORIZON_MS } from '../sources/poll.ts'
+import { githubCiThreadId, githubThreadId } from '../sources/github-trigger.ts'
+import { configuredRepositories, DEFAULT_GITHUB_REPOSITORIES } from '../deployment.ts'
 import { SettingsSchema, policyVersion, type SettingsOrigin } from '../policy.ts'
 import { autoMergeThreshold, teamDefaults } from './context.ts'
 import { PromptConfigSchema, type PromptConfig, type PromptVersion } from './prompts.ts'
@@ -17,12 +21,19 @@ import type { SettingsVersion, Store } from './store.ts'
 import { Versions } from './versions.ts'
 import { KV, type Key } from '../kv.ts'
 
-export const SCHEMA_VERSION = 11
+export const SCHEMA_VERSION = 13
 /** The oldest database schema version this build can open and migrate directly. */
 export const OLDEST_SCHEMA = 10
 /** Returns an error message explaining why `version` cannot be opened: older schemas need a new state directory. */
 export const tooOld = (version: number): string =>
   `Orchestrator database schema ${version} predates schema ${OLDEST_SCHEMA}, which this version cannot migrate; start with a new state directory`
+
+/** Runs every migration step from `version` to `SCHEMA_VERSION` in one transaction. */
+export function migrate(store: Store, version: number): void {
+  if (version < 11) migrateTo11(store)
+  if (version < 12) migrateTo12(store)
+  migrateTo13(store)
+}
 
 type Stored = Record<string, unknown>
 const isObject = (value: unknown): value is Stored => !!value && typeof value === 'object' && !Array.isArray(value)
@@ -89,6 +100,186 @@ export function migrateTo11(store: Store): void {
   step('the reasons', () => { reasonsAsCodes(store) })
   step('the Triggers\' times', () => { triggerTimes(store) })
 }
+/**
+ * Migrates a schema 12 database to schema 13: saved prompt configurations gain the team's `custom` section, empty, so a team
+ * can write it and a prompt save keeps it.
+ */
+export function migrateTo13(store: Store): void {
+  step('the prompt versions', () => {
+    for (const name of store.keys('prompt-version:')) {
+      const version = store.get<PromptVersion & { config: unknown }>(name)!
+      if (!isObject(version.config) || typeof version.config.custom === 'string') continue
+      store.set(name, { ...version, config: { ...version.config, custom: '' } })
+    }
+  })
+}
+/**
+ * Migrates a schema 11 database to schema 12: GitHub Threads name the repository they belong to, `github:12` becoming
+ * `github:owner/name#12` and `github:ci:main` becoming `github:owner/name#ci:main`, best-effort to the first configured
+ * repository. Every record that names a Thread follows, and so do the Source's per-Issue/PR records in the key-value store.
+ * Queued effect payloads that merely display a Thread key are left as written; they carry no identity.
+ */
+export function migrateTo12(store: Store): void {
+  const repository = firstGithubRepository(store)
+  const renamed = (key: string): string => {
+    if (!key.startsWith('github:')) return key
+    const id = key.slice('github:'.length)
+    const next = legacyGithubThreadId(id, repository)
+    return next === id ? key : `github:${next}`
+  }
+  step('the GitHub Threads', () => {
+    for (const thread of store.threads.list()) {
+      if (thread.ref.source !== 'github-issue' && thread.ref.source !== 'github') continue
+      const key = renamed(thread.key)
+      const ref = { ...thread.ref, source: 'github' as const, id: legacyGithubThreadId(thread.ref.id, repository) }
+      const next: Thread = { ...thread, key, ref, correlated: thread.correlated.map(renamed),
+        ...thread.evaluating ? { evaluating: { ...thread.evaluating, threadKey: key } } : {} }
+      if (key === thread.key && JSON.stringify(next) === JSON.stringify(thread)) continue
+      if (key !== thread.key) store.db.prepare('DELETE FROM thread WHERE key = ?').run(thread.key)
+      store.threads.save(next)
+    }
+  })
+  step('the GitHub Triggers', () => {
+    for (const row of store.db.prepare("SELECT id, value FROM trigger WHERE value ->> '$.source' = 'github'").all()) {
+      const trigger = JSON.parse(String(row.value)) as Trigger
+      const threads = trigger.threads.map(item => item.source === 'github' ? { ...item, id: legacyGithubThreadId(item.id, repository) } : item)
+      // A Trigger that predates multiple repositories belongs to the first configured one, as its Threads do.
+      const meta = trigger.meta.repo === undefined ? { ...trigger.meta, repo: repository } : trigger.meta
+      if (JSON.stringify(threads) === JSON.stringify(trigger.threads) && meta === trigger.meta) continue
+      store.triggers.save({ ...trigger, threads, meta })
+    }
+  })
+  step('the GitHub body Trigger IDs', () => { migrateGithubTriggerIds(store, repository) })
+  // Decisions record the Thread they decided about, which their `thread` column also indexes.
+  step('the Decisions', () => {
+    for (const row of store.db.prepare("SELECT id, value FROM decision WHERE value ->> '$.threadKey' LIKE 'github:%'").all()) {
+      const decision = JSON.parse(String(row.value)) as Decision
+      store.decisions.save({ ...decision, threadKey: renamed(decision.threadKey) })
+    }
+  })
+  step('the Tickets', () => {
+    for (const ticket of store.tickets.list()) {
+      const follows = ticket.follows?.map(item => ({ ...item, thread: renamed(item.thread) }))
+      const channels = ticket.channels.map(channel => channel.source !== 'github' ? channel
+        : { ...channel, thread: renamed(channel.thread), address: githubChannelAddress(channel, repository) })
+      if (JSON.stringify(follows) === JSON.stringify(ticket.follows) && JSON.stringify(channels) === JSON.stringify(ticket.channels)) continue
+      store.tickets.save({ ...ticket, ...follows ? { follows } : {}, channels })
+    }
+  })
+  step('the queued replies', () => {
+    for (const row of store.db.prepare("SELECT id, value FROM outbox WHERE value ->> '$.channel.source' = 'github'").all()) {
+      const message = JSON.parse(String(row.value)) as { channel: ChannelRef }
+      const channel = { ...message.channel, thread: renamed(message.channel.thread), address: githubChannelAddress(message.channel, repository) }
+      store.db.prepare('UPDATE outbox SET value = ? WHERE id = ?').run(JSON.stringify({ ...message, channel }), row.id!)
+    }
+  })
+  // The Source's per-Issue/PR cursors and CI fingerprints are keyed by Thread ID, and its stream, branch-CI, and retry
+  // records gain the repository.
+  step('the GitHub cursors', () => {
+    rekeyGithubNumbers(store, 'github-cursor:', repository)
+    rekeyGithubNumbers(store, 'github-ci:', repository)
+    for (const name of store.keys('github-stream:')) rekeyGithubStream(store, name, repository)
+    const branchCi = store.get<unknown>('github-branch-ci')
+    if (branchCi !== undefined) {
+      store.set(KV.github.branchCi(repository), branchCi as { branch?: string; failures?: string[]; revision: number })
+      store.delete('github-branch-ci')
+    }
+    const retries = store.get(KV.github.retries)
+    if (retries) {
+      const rekeyed = Object.fromEntries(Object.entries(retries).map(([key, retry]) => [legacyGithubThreadId(key, repository), retry]))
+      if (JSON.stringify(rekeyed) !== JSON.stringify(retries)) store.set(KV.github.retries, rekeyed)
+    }
+  })
+}
+/**
+ * Renames the schema 11 body Triggers stored as `github-issue:<number>` to `github-issue:<owner/name#number>`, so a later
+ * poll of that body still recognizes the one it took in, and rewrites every record that names one of them.
+ */
+function migrateGithubTriggerIds(store: Store, repository: string): void {
+  const rename = (text: string): string => text.replace(/github-issue:(\d+)/g, (_match, number: string) =>
+    `github-issue:${githubThreadId(repository, Number(number))}`)
+  const old = store.db.prepare("SELECT id FROM trigger WHERE id LIKE 'github-issue:%'").all().map(row => String(row.id))
+    .filter(id => rename(id) !== id)
+  for (const id of old) {
+    const trigger = store.triggers.get(id)
+    if (!trigger) continue
+    const next = rename(id)
+    store.db.prepare('DELETE FROM trigger WHERE id = ?').run(id)
+    // The index of a Trigger's Threads is rewritten by the save, but the rows of its old ID are not removed with it.
+    store.db.prepare('DELETE FROM trigger_thread WHERE id = ?').run(id)
+    store.triggers.save({ ...trigger, id: next })
+  }
+  // Dispositions are keyed by Trigger ID; their decisions are keyed by their own IDs and need no rename.
+  for (const row of store.db.prepare("SELECT id, value FROM disposition WHERE id LIKE 'github-issue:%'").all()) {
+    const id = String(row.id), next = rename(id)
+    if (next === id) continue
+    store.db.prepare('DELETE FROM disposition WHERE id = ?').run(id)
+    store.triggers.saveDisposition(next, JSON.parse(rename(String(row.value))) as TriggerDisposition)
+  }
+  // Tickets, decisions, threads, and queued effects name Trigger IDs in their payloads.
+  const rewriteRows = (table: string, keyColumn: string, save: (value: string) => void) => {
+    for (const row of store.db.prepare(`SELECT ${keyColumn} AS name, value FROM ${table}`).all()) {
+      const value = String(row.value), next = rename(value)
+      if (next !== value) save(next)
+    }
+  }
+  rewriteRows('ticket', 'id', value => {
+    const ticket = JSON.parse(value) as Ticket
+    store.tickets.save(ticket)
+  })
+  rewriteRows('decision', 'id', value => {
+    const decision = JSON.parse(value) as Decision
+    store.decisions.save(decision)
+  })
+  rewriteRows('thread', 'key', value => {
+    const thread = JSON.parse(value) as Thread
+    store.threads.save(thread)
+  })
+  // Effects carry a Trigger ID in their payload (such as a queued assessment), which the row's key does not identify.
+  for (const row of store.db.prepare("SELECT kind, key, value FROM effect WHERE value LIKE '%github-issue:%'").all()) {
+    const value = rename(String(row.value))
+    store.db.prepare('UPDATE effect SET value = ? WHERE kind = ? AND key = ?').run(value, row.kind!, row.key!)
+  }
+}
+
+/** The repository a schema 11 GitHub record is assigned to: the first configured repository, else the first built-in one. */
+function firstGithubRepository(store: Store): string {
+  let config: { repositories?: unknown; repository?: unknown } | undefined
+  try { config = store.settings().sources.github?.config } catch { config = undefined /* Unreadable settings fall back to the default repository. */ }
+  // The best guess is the first configured repository that is a valid name; otherwise the first built-in one.
+  return configuredRepositories(config).find(name => /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(name)) ?? DEFAULT_GITHUB_REPOSITORIES[0]!
+}
+/** Rewrites a schema 11 GitHub Thread ID (`12` or `ci:main`) to name `repository`; any other ID is returned unchanged. */
+function legacyGithubThreadId(id: string, repository: string): string {
+  const number = /^(\d+)$/.exec(id)
+  if (number) return githubThreadId(repository, Number(number[1]))
+  const branch = /^ci:(.+)$/.exec(id)
+  return branch ? githubCiThreadId(repository, branch[1]!) : id
+}
+/** Adds the repository to a GitHub Channel address that predates it, keeping the number and any comment URL. */
+function githubChannelAddress(channel: ChannelRef, repository: string): Record<string, string> {
+  const address = channel.address
+  return typeof address.number === 'string' && address.repo === undefined ? { ...address, repo: repository } : address
+}
+/** Renames `prefix<number>` keys to `prefix<owner/name#number>`, keeping an already-migrated record. */
+function rekeyGithubNumbers(store: Store, prefix: string, repository: string): void {
+  for (const name of store.keys(prefix)) {
+    const id = name.slice(prefix.length)
+    if (!/^\d+$/.test(id)) continue
+    const next = `${prefix}${githubThreadId(repository, Number(id))}`
+    if (store.get(next) === undefined) store.set(next, store.get(name))
+    store.delete(name)
+  }
+}
+/** Renames `github-stream:<stream>` to `github-stream:<owner/name#stream>`, keeping an already-migrated record. */
+function rekeyGithubStream(store: Store, name: string, repository: string): void {
+  const stream = name.slice('github-stream:'.length)
+  if (stream.includes('#')) return
+  const next = `github-stream:${repository}#${stream}`
+  if (store.get(next) === undefined) store.set(next, store.get(name))
+  store.delete(name)
+}
+
 /**
  * Normalize trigger and thread timestamps to fixed-width millisecond ISO strings so lexicographical text order matches
  * chronological order (GitHub wrote whole seconds like `…:00Z`, which sorted after `…:00.001Z`).
@@ -291,7 +482,7 @@ function normalize(config: unknown): PromptConfig {
     skills: Object.fromEntries(Object.entries(legacy.data.guides).filter(([name]) => !LEGACY_FIXED.has(name)).map(([name, body]) => [name, legacyText(body)])) }
     : PromptConfigSchema.parse(config)
   return { communication: currentNames(current.communication), scope: currentNames(current.scope), delivery: currentNames(current.delivery),
-    skills: Object.fromEntries(Object.entries(current.skills).map(([name, body]) => [name, currentNames(body)])) }
+    custom: currentNames(current.custom), skills: Object.fromEntries(Object.entries(current.skills).map(([name, body]) => [name, currentNames(body)])) }
 }
 /**
  * Normalize stored prompt revisions to current sections and names (recording original configs under `legacy` when saved
@@ -578,8 +769,10 @@ function issueSourceRecords(store: Store): void {
   const retries = { ...store.get(KV.github.retries) }
   for (const { number, at } of Object.values(pending)) {
     if (!(Date.now() - Date.parse(at) < POLL_HORIZON_MS)) continue
-    const retry = retries[number]
-    retries[number] = { ...retry, since: retry && retry.since < at ? retry.since : at, pr: retry?.pr ?? false }
+    // The retry record is rekeyed with its repository by the schema 12 step.
+    const key = String(number)
+    const retry = retries[key]
+    retries[key] = { ...retry, since: retry && retry.since < at ? retry.since : at, pr: retry?.pr ?? false }
   }
   if (Object.keys(retries).length) store.set(KV.github.retries, retries)
   const kept = ['github-issue-pending', 'github-issues-since', 'github-issues-started-at', ...store.keys('github-issue-eligibility:')]
@@ -589,7 +782,8 @@ function issueSourceRecords(store: Store): void {
 function githubCursors(store: Store): void {
   for (const name of [...store.keys('github-thread:'), ...store.keys('thread-since:github:')]) {
     const at = store.get<string>(name as Key<string>)
-    const cursor = KV.github.cursor(Number(name.slice(name.lastIndexOf(':') + 1)))
+    // The cursor is rekeyed with its repository by the schema 12 step.
+    const cursor = KV.github.cursor(name.slice(name.lastIndexOf(':') + 1))
     const current = store.get(cursor)
     if (at && !(current && current >= at)) store.set(cursor, at)
     store.delete(name)

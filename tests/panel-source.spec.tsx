@@ -190,7 +190,7 @@ it('shows the Sources waiting for the deployment check, and the problem on the S
   // The GitHub Source is where the problem is fixed, so it shows the error; Feishu waits.
   expect(rows.map(row => row.querySelector('.dt-status-text')?.textContent)).toEqual(['等待部署检查', '出错'])
   expect(text()).not.toContain('Waiting for setup')
-  expect(rows[1]!.textContent).toContain('部署检查未通过：GitHub 来源没有设置监听的仓库。')
+  expect(rows[1]!.textContent).toContain(zh['setup.repositoryUnset'])
   await click(find(zh.sourceOpenSettings, '.dt-row button'))
   expect(document.querySelector('.dt-settings-link[aria-current="page"]')?.textContent).toBe(zh['term.source'])
 })

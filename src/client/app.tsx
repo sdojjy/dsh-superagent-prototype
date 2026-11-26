@@ -13,7 +13,7 @@ import { HOME, TABS, initialLocation, lastSettingsGroup, remember, routeLabel, s
   type Tab } from './route.ts'
 import { SettingsPage } from './settings.tsx'
 import { SourceStatus } from './source.tsx'
-import { actorName, errorText, reasonLabel, valueLabel, type T, readableMarkers } from './text.ts'
+import { actorName, errorText, reasonLabel, uiLanguage, valueLabel, type T, readableMarkers } from './text.ts'
 import { ThreadPage } from './thread.tsx'
 import { TicketPage } from './ticket.tsx'
 import { TriggerStatus } from './trigger.tsx'
@@ -26,7 +26,8 @@ export interface AppProps {
 
 function Glossary({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { t } = usePanel()
-  const chinese = t('tab.overview') === zh['tab.overview']
+  // The glossary shows the interface language's column first and the other language beside it.
+  const chinese = uiLanguage(t) === 'zh'
   const [own, other] = chinese ? [zh, en] : [en, zh]
   const heading = (group: keyof typeof GLOSSARY) => t(group === 'roles' ? 'glossaryGroup.roles' : `tab.${group}`)
   return <Modal className="dt-glossary-modal" open={open} onClose={onClose} title={t('glossary')} closeLabel={t('close')}

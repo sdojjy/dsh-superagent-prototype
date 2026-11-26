@@ -263,7 +263,9 @@ export class MasterAssessor implements Assessor {
         body = JSON.stringify({ images: references, next_read: next, ...result.body })
       }
       else {
-        body = await readRepositoryPath(commands, read.path!, read.resource === 'directory' ? 'directory' : 'file')
+        // Repository files come from the Trigger's own repository, which need not be the first configured one.
+        const repository = typeof trigger.meta.repo === 'string' ? trigger.meta.repo : undefined
+        body = await readRepositoryPath(repository ? commands.forRepository(repository) : commands, read.path!, read.resource === 'directory' ? 'directory' : 'file')
       }
       snapshots.set(cacheKey, body)
       return textPage(read.resource, body, read.offset, 4000)

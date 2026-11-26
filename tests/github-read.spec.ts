@@ -12,6 +12,21 @@ it('reads a bounded comment page and exposes the next page reference', async () 
   expect(gh).toHaveBeenCalledWith(['api', 'repos/acme/widgets/issues/123/comments?per_page=20&page=2'])
 })
 
+it('reads another configured repository\'s Issue when the resource names it, and no unconfigured one', async () => {
+  const both = new Commands(() => testDeployment({ repositories: ['acme/widgets', 'acme/gadgets'] }), {}, new AbortController().signal)
+  // A resource that names another repository reads it through its own Commands instance, so the fake is installed on the class.
+  const gh = vi.spyOn(Commands.prototype, 'gh').mockResolvedValue([{ id: 1, body: 'comment', user: { login: 'carol' } }])
+  try {
+    expect(await readGithub(both, 'github/acme/gadgets/issues/9/comments/1')).toMatchObject({ messages: [expect.objectContaining({ text: 'comment' })] })
+    expect(gh).toHaveBeenCalledWith(['api', 'repos/acme/gadgets/issues/9/comments?per_page=20&page=1'])
+    await expect(readGithub(both, 'github/someone/else/issues/9')).rejects.toThrow('restricted to the configured repositories')
+    // A resource written before multiple repositories named no repository, and still reads the first configured one.
+    gh.mockResolvedValue([])
+    await readGithub(both, 'github/issues/9/comments/1')
+    expect(gh).toHaveBeenLastCalledWith(['api', 'repos/acme/widgets/issues/9/comments?per_page=20&page=1'])
+  } finally { gh.mockRestore() }
+})
+
 it('rejects unsupported or escaping paths without making a request', async () => {
   const gh = vi.spyOn(commands, 'gh')
   for (const resource of ['github/../outside', 'github/issues/1/reviews', 'github/pulls/1/checks/2', 'github/issues/1?repo=other']) {

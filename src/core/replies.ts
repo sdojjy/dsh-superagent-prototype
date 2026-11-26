@@ -2,8 +2,8 @@
 import { key } from './ids.ts'
 import { UserError } from './errors.ts'
 import { latestAssignment, liveTicket, ticketOutcome } from './model.ts'
-import type { ChannelRef, Ticket, Trigger } from './model.ts'
-import type { ReplyStatus } from './ports.ts'
+import type { Attention, ChannelRef, Ticket, Trigger } from './model.ts'
+import type { OutboundMessage, ReplyStatus } from './ports.ts'
 import { EnginePart } from './part.ts'
 
 /**
@@ -83,12 +83,24 @@ export class Replies extends EnginePart {
     const asker = attention?.triggerId ? this.repo.triggers.get(attention.triggerId) : undefined
     const channel = request.purpose === 'answer' ? trigger!.channel : asker?.channel ?? (ticket ? this.sourceChannel(ticket) : undefined)
     if (!channel) throw new UserError('noChannel')
-    this.options.outbox.send({ id, channel, text: request.text, kind: 'reply', ...ticket ? { ticketId: ticket.id } : {} })
+    // A result, an answer, and a question for a person name the requester, so a Channel that can address a person notifies them.
+    const mention = this.mention(ticket, attention, request.purpose === 'answer' ? trigger : undefined)
+    this.options.outbox.send({ id, channel, text: request.text, kind: 'reply', ...mention ? { mention } : {}, ...ticket ? { ticketId: ticket.id } : {} })
     if (request.purpose === 'answer' && ticket && trigger && ticket.answers?.includes(trigger.id)) {
       ticket.answers = ticket.answers.filter(item => item !== trigger.id)
       this.repo.tickets.save(ticket)
     }
     return { id, status: this.options.outbox.status(id) ?? 'pending', reused: existing !== undefined }
+  }
+  /**
+   * The person a reply names: the requester whose message raised the ticket's current question, else the person whose message
+   * started the ticket, else the person whose question an answer answers. Only a Feishu person is named, because Feishu's at
+   * syntax takes an open_id, and only a person's message, never a bot's, asks for work.
+   */
+  private mention(ticket: Ticket | undefined, attention: Attention | undefined, answered: Trigger | undefined): OutboundMessage['mention'] {
+    const asked = attention?.triggerId ? this.repo.triggers.get(attention.triggerId) : undefined
+    const person = [asked, ticket ? this.source(ticket) : undefined, answered].find(item => item?.human)
+    return person?.actor.source === 'feishu' ? { source: person.actor.source, id: person.actor.id } : undefined
   }
   /** The conversation a ticket started in: its origin Trigger's Channel, else its first Channel. */
   private sourceChannel(ticket: Ticket): ChannelRef | undefined { return this.source(ticket)?.channel ?? ticket.channels[0] }

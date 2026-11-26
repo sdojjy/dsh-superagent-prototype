@@ -9,7 +9,7 @@ import { server, found } from './fixtures/panel-server.ts'
 usePanel()
 it('states why a filtered search result has no Thread instead of opening an empty one', async () => {
   server.search = { items: [found('e9', '2026-09-20T00:00:00Z', { source: 'github', actor: { source: 'github', id: 'someone' },
-    preview: 'issue text', threads: ['github:7'],
+    preview: 'issue text', threads: ['github:acme/widgets#7'],
     filtered: 'source_disabled' })], threads: [] }
   await mount()
   await type(field<HTMLInputElement>(zh.searchLabel), 'issue')

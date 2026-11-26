@@ -28,6 +28,22 @@ Executor Sessions run commands without approval as the operator's OS user. Their
 
 The main Session uses `dsh-superagent-router`, with the same 5-second shell and job-wait limits and a smaller tool set for routing. Sessions retain the preset selected at creation. Worker subagents use DeepSeek Harness's `standard` preset.
 
+### Execution mode
+
+The Execution settings set `mode`: `develop`, the default, implements and delivers, while `review` only reads code and reports findings. A review Executor works under hard guards that dsh-superagent writes into the worker environment, and the `runtime/review` prompt section states the same rules to the model; the guards hold even if a team overrides that prompt.
+
+| Guard | What it does in `review` |
+| --- | --- |
+| Git hooks | `worker-gitconfig` sets `core.hooksPath` to `<stateDir>/worker-hooks`; its `pre-commit`, `pre-push` and `pre-rebase` refuse and print why. Saving `develop` removes the hooks and the setting |
+| `gh` wrapper | The `gh` shim only runs `gh api` GET, the two `gh api` POST review-comment paths (`repos/<owner>/<repo>/pulls/<n>/reviews` and `repos/<owner>/<repo>/pulls/comments`), `pr view/list/diff/checks/status`, `issue view/list/status`, `repo view/list`, `search`, `auth status` and `--version`. Any other command, method or path, and any `gh api` field flag (`-f`, `--raw-field`, `--input`) that would write, fails with a sentence naming what review may do |
+| HOME | Worker processes read `HOME=<stateDir>/worker-home` (mode 0700), with `XDG_CONFIG_HOME` and `XDG_CACHE_HOME` below it, so they read no operator dotfiles. The `gh` and `lark-cli` shims give their CLI the operator's HOME for that one process, so a wrapper that resolves `GH_CONFIG_DIR`/`LARKSUITE_CLI_CONFIG_DIR` through `$HOME` keeps its account configuration |
+| Variables | Review mode also clears `SSH_AUTH_SOCK`, the `AWS_*` credentials, `KUBECONFIG`, `DISPLAY`, `DOCKER_*`, `GOOGLE_APPLICATION_CREDENTIALS`, `AZURE_CONFIG_DIR` and `VAULT_ADDR` |
+| Blocked commands | `blockedCommands` keeps its meaning, and review mode adds `ssh`, `scp`, `rsync`, `security`, `osascript`, `curl`, `wget` and `open` unconditionally: the Execution settings can add more, but cannot unblock these while the mode is review |
+
+Setup verifies the hooks path, the hook files and the `gh` wrapper at startup and whenever the mode changes; a mismatch is the `reviewGuardMissing` setup problem instead of a review that only a prompt asks for.
+
+These guards are default-path guardrails, not an OS sandbox: an Executor still runs as the operator's user with `danger-full-access`, an absolute path reaches a program the shim does not wrap, and `git commit --no-verify` skips a hook. They remove the ordinary ways to write and make an accidental write fail loudly. For real isolation, run dsh-superagent under a dedicated OS account.
+
 ### Background work and worker slots
 
 When a turn ends with shell jobs or subagents still running, the Ticket keeps its worker slot and stays working. It is not reported as waiting, and the main Session receives no waiting report. A completed job or subagent wakes the Executor with its result in the same slot. Once a turn ends with no background work, the Executor reports waiting normally.
@@ -67,15 +83,16 @@ The prepare command and Executor instructions receive the same execution variabl
 | Variable | Registered by | Value |
 | --- | --- | --- |
 | `DSH_SUPERAGENT_DIR`, `DSH_SUPERAGENT_NAME`, `DSH_SUPERAGENT_TICKET` | Executor | The Ticket's directory, short name and id |
-| `DSH_SUPERAGENT_BLOCKED_COMMANDS` | Executor | Commands the Executor may not run |
-| `DSH_SUPERAGENT_GITHUB_REPOSITORY` | GitHub | The repository the Source watches, `owner/name` |
+| `DSH_SUPERAGENT_BLOCKED_COMMANDS` | Executor | Commands the Executor may not run; review mode adds its own list |
+| `DSH_SUPERAGENT_GITHUB_REPOSITORY` | GitHub | The repository this Ticket belongs to, `owner/name`: the repository of the GitHub Trigger, or the first configured repository for a Ticket from another Source |
+| `DSH_SUPERAGENT_GITHUB_REPOSITORIES` | GitHub | Every repository the Source watches, one `owner/name` per line |
 | `DSH_SUPERAGENT_GITHUB_ACCOUNT`, `DSH_SUPERAGENT_GITHUB_COMMIT_EMAIL` | GitHub | The agent account and its commit email |
 | `DSH_SUPERAGENT_GITHUB_NUMBER`, `DSH_SUPERAGENT_GITHUB_PR_HEAD` | GitHub | The Issue or pull request that started the Ticket, and its head ref when it is a pull request |
 | `DSH_SUPERAGENT_FEISHU_BOT`, `DSH_SUPERAGENT_FEISHU_CHAT` | Feishu | The bot, and the chat that started the Ticket |
 
 Ticket-specific values come from its directory and originating Trigger. Other values come from the current deployment settings. Only the panel can change execution environment settings; text sent to the main Session cannot change the configured shell command.
 
-Workers reach GitHub through the agent account's `gh` and Feishu through the bot's `lark-cli`. Blocked commands fail when invoked by name.
+Workers reach GitHub through the agent account's `gh` and Feishu through the bot's `lark-cli`. Blocked commands fail when invoked by name. In review mode the `gh` shim is the read-only wrapper described under Execution mode.
 
 These wrappers and directories establish defaults, not a security boundary. A worker can still execute a program by absolute path.
 
