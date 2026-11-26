@@ -219,7 +219,9 @@ const reviewGhBody = (preamble: string, cli: string): string => [
   `  issue) case "\${1:-list}" in view|list|status) exec ${shellQuote(cli)} issue "$@" ;; *) deny ;; esac ;;`,
   `  repo) case "\${1:-view}" in view|list) exec ${shellQuote(cli)} repo "$@" ;; *) deny ;; esac ;;`,
   `  search) exec ${shellQuote(cli)} search "$@" ;;`,
-  `  auth) [ "\${1:-}" = status ] && [ $# -eq 1 ] && exec ${shellQuote(cli)} auth status; deny ;;`,
+  // `auth git-credential` is what git's credential helper calls; refusing it would leave every clone and fetch without
+  // credentials, so review mode passes it through while still refusing token printing.
+  `  auth) case "\${1:-}" in status) [ $# -eq 1 ] && exec ${shellQuote(cli)} auth status ;; git-credential) shift; exec ${shellQuote(cli)} auth git-credential "$@" ;; esac; deny ;;`,
   '  *) deny ;;',
   'esac',
 ].join('\n')

@@ -78,6 +78,7 @@ describe('review-mode gh wrapper', () => {
     ['repo', 'view'],
     ['search', 'prs', 'fix'],
     ['auth', 'status'],
+    ['auth', 'git-credential', 'get'],
     ['--version'],
   ])('runs the read command %s', async (...args: string[]) => {
     const { stdout } = await gh(...args)

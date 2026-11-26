@@ -1475,3 +1475,30 @@ describe('observing the GitHub repository', () => {
     h.store.close()
   })
 })
+
+describe('github ticket target resolution', () => {
+  const deployment = testDeployment({ repositories: ['acme/widgets', 'acme/gadgets'], repository: 'acme/widgets' })
+  const values = (trigger: Trigger): Record<string, string> =>
+    (githubKind.environment!.values! as (context: { deployment: typeof deployment; trigger: Trigger }) => Record<string, string>)({ deployment, trigger })
+  const feishu = (text: string): Trigger => ({ id: key('feishu-message', text), source: 'feishu', threads: [{ source: 'feishu', id: 'oc_chat' }],
+    actor: { source: 'feishu', id: 'ou_asker' }, human: true, at: '2026-01-01T00:00:00.000Z', text })
+  it('takes the repository and pull request a Feishu request names by URL', () => {
+    expect(values(feishu('review https://github.com/acme/gadgets/pull/3658 please'))).toMatchObject({
+      DSH_SUPERAGENT_GITHUB_REPOSITORY: 'acme/gadgets', DSH_SUPERAGENT_GITHUB_NUMBER: '3658',
+      DSH_SUPERAGENT_GITHUB_PR_HEAD: 'refs/pull/3658/head', DSH_SUPERAGENT_GITHUB_REPOSITORIES: 'acme/widgets\nacme/gadgets' })
+  })
+  it('takes a bare configured repository name, without inventing a number', () => {
+    expect(values(feishu('look at acme/gadgets when you can'))).toMatchObject({
+      DSH_SUPERAGENT_GITHUB_REPOSITORY: 'acme/gadgets', DSH_SUPERAGENT_GITHUB_NUMBER: '', DSH_SUPERAGENT_GITHUB_PR_HEAD: '' })
+  })
+  it('falls back to the first configured repository when the request names none', () => {
+    expect(values(feishu('review the thing please'))).toMatchObject({ DSH_SUPERAGENT_GITHUB_REPOSITORY: 'acme/widgets' })
+  })
+  it('keeps a GitHub trigger on its own repository and number', () => {
+    const trigger: Trigger = { id: 'github-issue:acme/gadgets#12', source: 'github', threads: [{ source: 'github', id: 'acme/gadgets#12' }],
+      actor: { source: 'github', id: 'asker' }, human: true, at: '2026-01-01T00:00:00.000Z', text: 'fix it',
+      meta: { repo: 'acme/gadgets', number: 12, isPr: true, prAuthor: 'asker', kind: 'pull' } }
+    expect(values(trigger)).toMatchObject({ DSH_SUPERAGENT_GITHUB_REPOSITORY: 'acme/gadgets', DSH_SUPERAGENT_GITHUB_NUMBER: '12',
+      DSH_SUPERAGENT_GITHUB_PR_HEAD: 'refs/pull/12/head' })
+  })
+})

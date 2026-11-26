@@ -105,13 +105,23 @@ export const githubKind: SourceKind<GithubConfig> = {
       { key: 'DSH_SUPERAGENT_GITHUB_NUMBER', description: { zh: '接下工单的 Issue 或 PR 编号；工单不是从 GitHub 来的时为空', en: 'Number of the Issue or PR that started the ticket; empty when the ticket did not start on GitHub' } },
       { key: 'DSH_SUPERAGENT_GITHUB_PR_HEAD', description: { zh: '接下工单的 PR 的 head 引用 refs/pull/<编号>/head；不是 PR 时为空', en: 'Head ref refs/pull/<number>/head of the PR that started the ticket; empty when it was not a PR' } },
     ],
+    // A request from another Source can name a configured repository and a pull request, so the ticket works in that repository
+    // instead of falling back to the first one: `github.com/<owner>/<name>/pull/<number>` wins, then a bare repository name.
     values: ({ deployment, trigger }) => {
-      const number = trigger?.threads[0]?.source === SOURCE && typeof trigger.meta.repo === 'string' ? Number(trigger.meta.number) || 0 : 0
-      const repository = trigger && typeof trigger.meta.repo === 'string' && trigger.meta.repo ? trigger.meta.repo : deployment.repository
+      const text = trigger?.text ?? ''
+      const own = typeof trigger?.meta?.repo === 'string' && trigger.meta.repo ? trigger.meta.repo : undefined
+      const url = /github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/(pull|issues)\/(\d+)/.exec(text)
+      const fromUrl = url && url[1] && deployment.repositories.includes(url[1]) ? url[1] : undefined
+      const bare = fromUrl ? undefined : deployment.repositories.find(repo => new RegExp(`(?:^|[^A-Za-z0-9_.-])${repo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9_.-])`).test(text))
+      const named = own ?? fromUrl ?? bare
+      const repository = named ?? deployment.repository
+      const fromText = named && !own && url && url[1] === named ? Number(url[3]) || 0 : 0
+      const number = own ? Number(trigger?.meta?.number) || 0 : fromText
+      const pull = own ? trigger?.meta?.isPr === true : !!fromText && url?.[2] === 'pull'
       return { DSH_SUPERAGENT_GITHUB_REPOSITORY: repository, DSH_SUPERAGENT_GITHUB_REPOSITORIES: deployment.repositories.join('\n'),
         DSH_SUPERAGENT_GITHUB_ACCOUNT: deployment.github.login, DSH_SUPERAGENT_GITHUB_COMMIT_EMAIL: deployment.github.noreply,
         DSH_SUPERAGENT_GITHUB_NUMBER: number ? String(number) : '',
-        DSH_SUPERAGENT_GITHUB_PR_HEAD: number && trigger?.meta.isPr === true ? `refs/pull/${number}/head` : '' }
+        DSH_SUPERAGENT_GITHUB_PR_HEAD: number && pull ? `refs/pull/${number}/head` : '' }
     },
   },
   facts: (deployment): Record<string, Localized | string> => deployment ? {
