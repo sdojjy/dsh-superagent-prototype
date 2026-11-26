@@ -206,9 +206,77 @@ def start(args):
     raise RuntimeError('Startup health check timed out; inspect the log. Any running process was left intact.')
 
 
+def state_database(profile):
+    """Return the orchestrator database of a profile, which records each Ticket's directory and end."""
+    base = os.environ.get('DSH_SUPERAGENT_STATE_DIR') or os.path.join(os.path.expanduser('~'), '.dsh', 'state', profile)
+    return Path(base) / 'orchestrator.sqlite'
+
+
+def ticket_worktrees(database):
+    """Yield `(ticket id, directory name, directory)` for every Ticket that ended and still records a directory."""
+    if not database.exists():
+        raise RuntimeError(f'{database} does not exist; name the state directory with DSH_SUPERAGENT_STATE_DIR')
+    import sqlite3
+    connection = sqlite3.connect(f'file:{database}?mode=ro', uri=True)
+    try:
+        for (value,) in connection.execute('select value from ticket'):
+            ticket = json.loads(value)
+            execution = ticket.get('execution') or {}
+            directory, name = execution.get('directory'), execution.get('name')
+            assignments = ticket.get('assignments') or []
+            busy = bool(assignments) and (assignments[-1].get('state') == 'running' or not assignments[-1].get('endedAt'))
+            # A worktree is only dead once its Ticket ended and no Assignment is still working in it.
+            if busy or not ticket.get('ended') or not directory or not name:
+                continue
+            yield ticket.get('id'), name, Path(directory)
+    finally:
+        connection.close()
+
+
+def clone_of(directory):
+    """Return the clone a ticket worktree belongs to, from the worktree's common git directory."""
+    result = subprocess.run(['git', '-C', str(directory), 'rev-parse', '--git-common-dir'], capture_output=True, text=True)
+    if result.returncode != 0:
+        return None
+    common = Path(result.stdout.strip())
+    if not common.is_absolute():
+        common = directory / common
+    return common.resolve().parent
+
+
+def prune(args):
+    """Remove the worktrees, branches and refs of ended Tickets, which a later resume recreates through its prepare command."""
+    removed, kept = 0, 0
+    for ticket, name, directory in ticket_worktrees(state_database(args.profile)):
+        if not directory.exists():
+            kept += 1
+            continue
+        clone = clone_of(directory)
+        if clone is None:
+            print(f'{directory} is not a git worktree; left in place.')
+            kept += 1
+            continue
+        if args.dry_run:
+            print(f'would remove {directory}')
+            removed += 1
+            continue
+        for argv in (['git', '-C', str(clone), 'worktree', 'remove', '--force', str(directory)],
+                     ['git', '-C', str(clone), 'branch', '-D', f'agent/{name}'],
+                     ['git', '-C', str(clone), 'update-ref', '-d', f'refs/dsh-superagent/{ticket}']):
+            subprocess.run(argv, capture_output=True, text=True)
+        if directory.exists():
+            print(f'{directory} could not be removed; left in place.')
+            kept += 1
+        else:
+            print(f'removed {directory}')
+            removed += 1
+    print(f'{removed} worktree(s) removed, {kept} kept.')
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['start', 'stop', 'restart', 'status'])
+    parser.add_argument('action', choices=['start', 'stop', 'restart', 'status', 'prune'])
     parser.add_argument('--profile', default=os.environ.get('DSH_SUPERAGENT_PROFILE') or 'superagent',
                         help='DSH profile that loads dsh-superagent; its tmux session is dsh-<profile>.')
     parser.add_argument('--url', default=os.environ.get('DSH_SUPERAGENT_URL') or 'http://127.0.0.1:3082',
@@ -218,6 +286,7 @@ def main():
                         help='Graceful shutdown timeout in seconds; running Executor Sessions finish their step first.')
     parser.add_argument('--respect-stop', action='store_true',
                         help='For monitoring: never start/restart after an intentional stop.')
+    parser.add_argument('--dry-run', action='store_true', help='With prune: list the worktrees it would remove.')
     args = parser.parse_args()
     if args.timeout <= 0 or args.stop_timeout <= 0:
         parser.error('--timeout and --stop-timeout must be positive')
@@ -234,6 +303,8 @@ def main():
             return 0
         if args.action == 'status':
             return status(args)
+        if args.action == 'prune':
+            return prune(args)
         if args.action in ('stop', 'restart'):
             # Only a stop keeps automatic recovery off; a restart whose stop timed out leaves it on.
             stop(args, intentional=args.action == 'stop')

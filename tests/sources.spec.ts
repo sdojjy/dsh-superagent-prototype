@@ -748,7 +748,9 @@ describe('github source', () => {
     h.store.saveSettings({ ...h.store.settings(), sources: { ...h.store.settings().sources,
       github: { enabled: true, config: { repositories: ['acme/widgets', 'acme/gadgets'], cli: 'gh', observeIssues: true } } } })
     const reads: string[] = []
-    const at = new Date().toISOString()
+    // The stream reads from the moment its kind was switched on, so an item minted before the round starts is ignored by
+    // design; a second of headroom keeps the fixture independent of the millisecond the round begins.
+    const at = new Date(Date.now() + 1000).toISOString()
     const item = (repository: string, number: number) => ({ id: number, number, title: `Issue ${number}`, state: 'open', created_at: at,
       html_url: `https://github.com/${repository}/issues/${number}`, repository_url: `https://api.github.com/repos/${repository}`,
       user: { login: 'alice', type: 'User' }, body: 'details' })
