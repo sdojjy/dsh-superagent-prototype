@@ -1481,7 +1481,7 @@ describe('github ticket target resolution', () => {
   const values = (trigger: Trigger): Record<string, string> =>
     (githubKind.environment!.values! as (context: { deployment: typeof deployment; trigger: Trigger }) => Record<string, string>)({ deployment, trigger })
   const feishu = (text: string): Trigger => ({ id: key('feishu-message', text), source: 'feishu', threads: [{ source: 'feishu', id: 'oc_chat' }],
-    actor: { source: 'feishu', id: 'ou_asker' }, human: true, at: '2026-01-01T00:00:00.000Z', text })
+    actor: { source: 'feishu', id: 'ou_asker' }, human: true, at: '2026-01-01T00:00:00.000Z', text, meta: {} })
   it('takes the repository and pull request a Feishu request names by URL', () => {
     expect(values(feishu('review https://github.com/acme/gadgets/pull/3658 please'))).toMatchObject({
       DSH_SUPERAGENT_GITHUB_REPOSITORY: 'acme/gadgets', DSH_SUPERAGENT_GITHUB_NUMBER: '3658',
