@@ -1431,7 +1431,7 @@ it('tells the conversation that the PR merged when work a restart recovered ends
     head: { sha: 'abc', ref: 'agent/x', repo: { full_name: 'acme/widgets' } } }
   await observePull(runtime.context(githubKind), merged)
   expect(runtime.store.tickets.get(ticket.id)).not.toHaveProperty('ended')
-  const id = key('pr-terminal', '42', 'acme/widgets', 'feishu', JSON.stringify({ chatId: CHAT, messageId: 'om_1' }), 'merged')
+  const id = key('pr-terminal', '42', 'acme/widgets', 'feishu', JSON.stringify({ chatId: CHAT, messageId: 'om_1', chatType: 'group' }), 'merged')
   expect(runtime.store.replyStatus(id)).toBeUndefined()
   // Its ready report ends the ticket with the PR, and the conversation hears of the merge once.
   await runTool(sessionId, 'orchestrator_report', { state: 'ready', summary: 'Recovered and verified' })

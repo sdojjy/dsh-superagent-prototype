@@ -4,9 +4,13 @@ import { key, type ChannelRef, type Trigger } from '../core/index.ts'
 import type { FeishuMessage, FeishuRef } from './feishu-read.ts'
 
 export const SOURCE = 'feishu'
-/** Constructs a Feishu reply channel address; records `direct` explicitly because both group and direct chat IDs start with `oc_`. */
+/**
+ * Constructs a Feishu reply channel address. Records `direct` explicitly because both group and direct chat IDs start with
+ * `oc_`, and `chatType` because a reply mentions the requester only in a group chat; an address stored before `chatType`
+ * existed does not say it is a group, so its replies mention nobody.
+ */
 export const feishuChannel = (chatId: string, messageId: string, direct = false): ChannelRef =>
-  ({ source: SOURCE, thread: `feishu:${chatId}`, address: { chatId, messageId, ...direct ? { direct: 'true' } : {} } })
+  ({ source: SOURCE, thread: `feishu:${chatId}`, address: { chatId, messageId, chatType: direct ? 'p2p' : 'group', ...direct ? { direct: 'true' } : {} } })
 /** A message as the live event consumer prints it; the history and topic-page paths normalize what they read into this shape. */
 const EventSchema = z.object({ message_id: z.string(), chat_id: z.string(), chat_type: z.enum(['p2p', 'group']),
   sender_id: z.string(), sender_type: z.enum(['user', 'bot']), content: z.string(), create_time: z.string(),
