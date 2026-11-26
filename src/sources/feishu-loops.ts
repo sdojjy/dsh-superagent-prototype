@@ -7,6 +7,7 @@ import { threadKey, type Thread, type Trigger } from '../core/index.ts'
 import { feishuChatLink } from './feishu-channel.ts'
 import type { FeishuBot } from '../deployment.ts'
 import { validItems, type Tally } from '../infra/commands.ts'
+import { operatorEnvironment } from '../infra/environment.ts'
 import { readFeishu, type FeishuRef } from './feishu-read.ts'
 import { feishuRef, feishuTime, feishuTrigger, HistoricalMessageSchema, historyEvent, HistoryPageSchema, SOURCE, topicEvent }
   from './feishu-trigger.ts'
@@ -64,6 +65,12 @@ async function watch(ctx: SourceContext, signal: AbortSignal): Promise<void> {
     await delay(retry, undefined, { signal }).catch(() => {})
   }
 }
+/**
+ * The operator's own HOME and XDG bases. Review mode isolates a worker shell's HOME in `process.env`, which a host-side CLI
+ * must not inherit: the account wrapper resolves its configuration directory from `$HOME`, and would otherwise find none.
+ */
+const hostEnvironment = (): Record<string, string> => Object.fromEntries(Object.entries(operatorEnvironment())
+  .filter((entry): entry is [string, string] => entry[1] !== undefined))
 /** Wait before restarting the event consumer: 1s after a run that stayed up for a minute, otherwise exponential backoff up to 60s. */
 export const consumerRetry = (previous: number | undefined, ranMs: number): number =>
   previous === undefined || ranMs >= 60_000 ? 1000 : Math.min(previous * 2, 60_000)
@@ -72,7 +79,7 @@ async function consume(ctx: SourceContext, signal: AbortSignal): Promise<void> {
   // piped: the service runs in tmux, whose terminal stays open for the life of the consumer. A piped stdin reads EOF as soon as
   // the host stops writing, which killed the consumer seconds after it reported ready.
   const child = spawn(bot(ctx).cli, ['event', 'consume', 'im.message.receive_v1', '--as', 'bot'],
-    { stdio: ['inherit', 'pipe', 'pipe'], env: { ...process.env, LARKSUITE_CLI_NO_UPDATE_NOTIFIER: '1',
+    { stdio: ['inherit', 'pipe', 'pipe'], env: { ...process.env, ...hostEnvironment(), LARKSUITE_CLI_NO_UPDATE_NOTIFIER: '1',
       LARKSUITE_CLI_NO_SKILLS_NOTIFIER: '1' } })
   const stdout = createInterface({ input: child.stdout }); const stderr = createInterface({ input: child.stderr })
   let chain = Promise.resolve(); let diagnostic = ''; let ready = false
