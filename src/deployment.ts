@@ -118,9 +118,13 @@ export function executable(name: string, path: string, exclude?: string): string
 
 export type Probe = (argv: string[]) => Promise<string>
 /** Run startup checks through DSH's worker subprocess service with worker shims removed from PATH so a `gh` wrapper script reaches the real binary. */
-export function workerProbe(subprocess: SubprocessRuntime, stateDir: string, cwd: string, signal: AbortSignal): Probe {
+export function workerProbe(subprocess: SubprocessRuntime, stateDir: string, cwd: string, signal: AbortSignal,
+  env: Record<string, string | undefined> = {}): Probe {
   const path = withoutDirectory(process.env.PATH ?? '', workerBin(stateDir))
-  return argv => runAsWorker(subprocess, ['env', `PATH=${path}`, ...argv], cwd, AbortSignal.any([signal, AbortSignal.timeout(60_000)]))
+  // `env` runs the CLI with the variables the host would give it (such as the operator's HOME while review mode isolates it).
+  const assignments = Object.entries(env).flatMap(([name, value]) => value === undefined ? [] : [`${name}=${value}`])
+  return argv => runAsWorker(subprocess, ['env', `PATH=${path}`, ...assignments, ...argv], cwd,
+    AbortSignal.any([signal, AbortSignal.timeout(60_000)]))
 }
 
 const GithubUser = z.object({ login: z.string().regex(/^[A-Za-z0-9-]+$/), id: z.number().int().positive() })

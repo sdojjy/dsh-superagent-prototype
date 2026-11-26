@@ -20,8 +20,8 @@ import { KV } from '../kv.ts'
  */
 export class SettingsConflict extends Error {}
 const now = (): string => new Date().toISOString()
-/** Executor settings that control shell execution paths, prepare commands, and command shims. */
-const environment = ({ executor }: SettingsValue) => JSON.stringify([executor.directory, executor.prepare, executor.blockedCommands])
+/** Executor settings that control shell execution paths, prepare commands, command shims, and the review-mode guards. */
+const environment = ({ executor }: SettingsValue) => JSON.stringify([executor.directory, executor.prepare, executor.blockedCommands, executor.mode])
 
 /** Schema parser, settings merger, and non-panel origin guard for one settings block kind. */
 interface Block {
@@ -67,8 +67,8 @@ export interface SettingsHost {
   readonly sessions: Pick<Sessions, 'notify' | 'delivery'>
   /** Source host passed to source kinds' policy syncs and label refreshes. */
   readonly sourceHost: SourceHost
-  /** Setup state, account/command checks, and restart trigger when setup-read fields change. */
-  readonly setup: Pick<Setup, 'configured' | 'checkAccounts' | 'blockCommands' | 'restart'>
+  /** Setup state, account/command checks, the worker environment, and restart trigger when setup-read fields change. */
+  readonly setup: Pick<Setup, 'configured' | 'checkAccounts' | 'configure' | 'restart'>
   /** Triggers an immediate pass so work newly allowed by a settings save runs right away. */
   requestPass(): void
 }
@@ -184,10 +184,11 @@ export class Settings {
       if (origin !== 'tool') sessions.notify(...settingsNotice(block, changedPaths(old, settings)))
       if (before !== after) engine.policyChanged(before, after, effects)
     })
-    // Rewrite worker command shims immediately when `blockedCommands` changes.
-    const blocked = settings.executor.blockedCommands
-    const changed = blocked.join(' ') !== old.executor.blockedCommands.join(' ')
-    if (changed) await this.host.setup.blockCommands(blocked)
+    // Rewrite the worker environment immediately when `blockedCommands` or the execution mode changes, so review-mode guards
+    // never wait for a restart and leaving review mode removes them.
+    const blocked = settings.executor.blockedCommands, mode = settings.executor.mode
+    const changed = blocked.join(' ') !== old.executor.blockedCommands.join(' ') || mode !== old.executor.mode
+    if (changed) await this.host.setup.configure(blocked, mode)
     // When restarting, the notice stays pending until after the restart; `setup.restart()` defers until this call returns.
     const delivery = restarting ? 'pending' : await sessions.delivery(`settings:${block}`)
     if (restarting) this.host.setup.restart()

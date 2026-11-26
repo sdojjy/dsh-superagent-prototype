@@ -1,6 +1,7 @@
 /**
- * Migrates a schema 10 or 11 database to the current schema in a single transaction so runtime readers never convert legacy
- * shapes: schema 11 reshapes the domain records, and schema 12 gives GitHub Threads the repository they belong to.
+ * Migrates a schema 10, 11 or 12 database to the current schema in a single transaction so runtime readers never convert
+ * legacy shapes: schema 11 reshapes the domain records, schema 12 gives GitHub Threads the repository they belong to, and
+ * schema 13 adds the team's custom prompt section to saved prompt versions.
  * Databases older than schema 10 are rejected: this version cannot migrate them.
  */
 import { basename } from 'node:path'
@@ -20,7 +21,7 @@ import type { SettingsVersion, Store } from './store.ts'
 import { Versions } from './versions.ts'
 import { KV, type Key } from '../kv.ts'
 
-export const SCHEMA_VERSION = 12
+export const SCHEMA_VERSION = 13
 /** The oldest database schema version this build can open and migrate directly. */
 export const OLDEST_SCHEMA = 10
 /** Returns an error message explaining why `version` cannot be opened: older schemas need a new state directory. */
@@ -30,7 +31,8 @@ export const tooOld = (version: number): string =>
 /** Runs every migration step from `version` to `SCHEMA_VERSION` in one transaction. */
 export function migrate(store: Store, version: number): void {
   if (version < 11) migrateTo11(store)
-  migrateTo12(store)
+  if (version < 12) migrateTo12(store)
+  migrateTo13(store)
 }
 
 type Stored = Record<string, unknown>
@@ -97,6 +99,19 @@ export function migrateTo11(store: Store): void {
   }
   step('the reasons', () => { reasonsAsCodes(store) })
   step('the Triggers\' times', () => { triggerTimes(store) })
+}
+/**
+ * Migrates a schema 12 database to schema 13: saved prompt configurations gain the team's `custom` section, empty, so a team
+ * can write it and a prompt save keeps it.
+ */
+export function migrateTo13(store: Store): void {
+  step('the prompt versions', () => {
+    for (const name of store.keys('prompt-version:')) {
+      const version = store.get<PromptVersion & { config: unknown }>(name)!
+      if (!isObject(version.config) || typeof version.config.custom === 'string') continue
+      store.set(name, { ...version, config: { ...version.config, custom: '' } })
+    }
+  })
 }
 /**
  * Migrates a schema 11 database to schema 12: GitHub Threads name the repository they belong to, `github:12` becoming
@@ -467,7 +482,7 @@ function normalize(config: unknown): PromptConfig {
     skills: Object.fromEntries(Object.entries(legacy.data.guides).filter(([name]) => !LEGACY_FIXED.has(name)).map(([name, body]) => [name, legacyText(body)])) }
     : PromptConfigSchema.parse(config)
   return { communication: currentNames(current.communication), scope: currentNames(current.scope), delivery: currentNames(current.delivery),
-    skills: Object.fromEntries(Object.entries(current.skills).map(([name, body]) => [name, currentNames(body)])) }
+    custom: currentNames(current.custom), skills: Object.fromEntries(Object.entries(current.skills).map(([name, body]) => [name, currentNames(body)])) }
 }
 /**
  * Normalize stored prompt revisions to current sections and names (recording original configs under `legacy` when saved

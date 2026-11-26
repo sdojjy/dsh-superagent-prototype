@@ -26,3 +26,5 @@ Record whom you have credited in orchestrator_report, so a later worker does not
 If a human is working on the same problem and their branch or PR contains this ticket's code (commits from the ticket branch, or its changes carried over), close this ticket's PR with gh immediately without asking anyone, leaving one sentence on it that names the human's PR.
 Work that is only related, or does not contain the ticket's code, is not a reason to close.
 Closing the PR ends the ticket; send no other message.
+
+Review mode produces no commits and no pull requests: when the Execution settings set the mode to review, read and report findings only, and leave every write to a person.

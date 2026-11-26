@@ -4,13 +4,14 @@ This document explains what the agents read, what a team can edit, and when chan
 
 ## What a team writes
 
-A team can edit three team sections, add skills, and override every built-in system-prompt part. Most defaults live under `prompts/` and `skills/`. Tool descriptions, notices and cards remain in code and cannot be edited through prompt settings.
+A team can edit four team sections, add skills, and override every built-in system-prompt part. Most defaults live under `prompts/` and `skills/`. Tool descriptions, notices and cards remain in code and cannot be edited through prompt settings.
 
 | Section | Holds |
 | --- | --- |
 | Communication | When to message people, how messages read, the line that begins every GitHub message (`This is by an automated agent, not a human` by default), how to handle reviews, and which ordinary accounts are review bots |
 | Ticket scope | When a Ticket goes on and when it stops with a draft |
 | Delivery requirements | Evidence in pull requests, the auto-merge condition with its line threshold, and the commit author; without one, the Executor commits as the agent account's no-reply address |
+| Custom instructions | The team's own additional rules, injected after the other team sections and before routing and work; empty by default, and empty injects nothing |
 | Team skills | Knowledge the agents load when they need it, such as an `identities` skill that says which Feishu user is which GitHub account |
 
 The built-in text covers the roles, tool usage, host mechanics, authorization rules, and the GitHub and Feishu skills. It refers to the team sections by their headings instead of repeating them.
@@ -23,6 +24,7 @@ Overrides use these keys:
 | --- | --- |
 | Shared instructions and roles | `runtime/shared`, `runtime/orchestrator`, `runtime/worker` |
 | Working instructions | `runtime/subscriptions`, `runtime/replies`, `runtime/dispatch`, `runtime/work`, `runtime/admission` |
+| Review mode | `runtime/review`, injected only while the Execution settings set the mode to review |
 | Handoff instructions | `runtime/handoff/orchestrator`, `runtime/handoff/worker` |
 | Source skills | `skill/feishu`, `skill/github` |
 | Generated sections | `runtime/environment`, `runtime/policy`, `runtime/policy/none` |
@@ -46,13 +48,16 @@ The main Session can read affected part names in `orchestrator_read prompts`, un
 The system prompt is assembled in this order:
 
 1. Shared instructions and the role.
-2. The three team sections.
-3. Subscriptions and replies.
-4. Dispatch for the main Session, or work instructions for an Executor.
-5. `runtime/admission`, for the main Session only.
-6. Handoff instructions.
-7. `runtime/environment`.
-8. `runtime/policy`, for the main Session only.
+2. The four team sections: Communication, Ticket scope, Delivery requirements and Custom instructions.
+3. `runtime/review`, when the Execution settings set the mode to review.
+4. Subscriptions and replies.
+5. Dispatch for the main Session, or work instructions for an Executor.
+6. `runtime/admission`, for the main Session only.
+7. Handoff instructions.
+8. `runtime/environment`.
+9. `runtime/policy`, for the main Session only.
+
+The review section states what the hard guards enforce in the worker environment: no file changes, no commits or pushes, no GitHub writes beyond an English review comment, findings as `file:line` with P1/P2/P3 severities, Chinese replies on Feishu and conclusions rather than process. The guards under [003 Execution](003-execution.md#execution-mode) hold even when a team overrides the section.
 
 Admission instructions come from `prompts/admission.md`. They describe proactive assessment and when an irrelevant candidate can be ignored from its card. `orchestrator_eval` returns context rather than repeating these instructions.
 
