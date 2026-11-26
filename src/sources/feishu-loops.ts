@@ -18,7 +18,11 @@ import type { FeishuConfig } from './feishu.ts'
 
 export const runFeishu = (ctx: SourceContext, signal: AbortSignal): Promise<unknown> =>
   Promise.allSettled([watch, backfillLoop, chatNamesLoop].map(loop => loop(ctx, signal)))
-const enabled = (ctx: SourceContext): FeishuConfig | undefined => ctx.config<FeishuConfig>(SOURCE)
+const enabled = (ctx: SourceContext): FeishuConfig | undefined => {
+  // The store closes during shutdown while the event-consumer watch loop and its timer can still run; a closed store means the
+  // Source is gone, and throwing there would escape a timer callback and terminate the host process.
+  try { return ctx.config<FeishuConfig>(SOURCE) } catch { return undefined }
+}
 const bot = (ctx: SourceContext): FeishuBot => {
   const resolved = ctx.deployment.feishu
   if (!resolved) throw new Error('The Feishu Source has no working bot CLI')
