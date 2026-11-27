@@ -140,7 +140,8 @@ export async function collectJob(ctx: Context, sessionId: string, job: { id: str
  */
 export async function stopSubagents(ctx: Context, agent: Agent, keepInbox = false): Promise<void> {
   const subagents = subagentsOf(ctx)
-  if (!subagents) return
+  // An installed DSH may expose a different subagent service, or none; releasing what this version cannot name is not a failure.
+  if (!subagents || typeof subagents.listChildren !== 'function' || typeof subagents.drainChildren !== 'function') return
   // The catalog lists every subagent the Session had; one that ended has no agent.
   const live = (await subagents.listChildren(agent.id)).map(child => child.id).filter(id => ctx.agents.get(id as SessionId))
   if (!live.length) return
