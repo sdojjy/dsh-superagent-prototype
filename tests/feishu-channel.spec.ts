@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { OutboundMessage } from '../src/core/index.ts'
-import { Commands } from '../src/infra/commands.ts'
+import { CliError, Commands } from '../src/infra/commands.ts'
 import { feishuChannel } from '../src/sources/feishu-trigger.ts'
 import { feishuReplyText, sendFeishu } from '../src/sources/feishu-channel.ts'
 import { testDeployment } from './fixtures/deployment.ts'
@@ -28,6 +28,19 @@ describe('Feishu replies', () => {
     expect(flag(args, '--message-id')).toBe('om_1')
     expect(args).toContain('--reply-in-thread')
     expect(flag(args, '--idempotency-key')).toBe('result-1')
+  })
+  it('replies inside the topic without starting a new one, which Feishu refuses on a message already in a topic', async () => {
+    const args = await lark().args(message({ channel: feishuChannel('oc_team', 'om_1', false, true) }))
+    expect(args).not.toContain('--reply-in-thread')
+    expect(flag(args, '--message-id')).toBe('om_1')
+  })
+  it('retries plainly when Feishu refuses to start a topic, so the conclusion still lands in it', async () => {
+    const commands = new Commands(() => deployment, {}, new AbortController().signal)
+    const run = vi.spyOn(commands, 'run').mockRejectedValueOnce(new CliError('Something went wrong', 2200)).mockResolvedValue('{"ok":true}')
+    expect(await sendFeishu({ commands }, message())).toBe('sent')
+    const second = run.mock.calls.at(-1)![1] as string[]
+    expect(second).not.toContain('--reply-in-thread')
+    expect(flag(second, '--idempotency-key')).toBe('result-1-plain')
   })
   it('mentions nobody in a direct chat, where the person is already the only reader', async () => {
     const args = await lark().args(message({ channel: feishuChannel('oc_dm', 'om_1', true), mention: { source: 'feishu', id: 'ou_alice' } }))

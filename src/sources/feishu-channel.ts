@@ -27,6 +27,8 @@ export function feishuReplyText(message: OutboundMessage): string {
  * True when Feishu permanently rejects a reply because the target message was recalled, withdrawn, or not found.
  * Only a Feishu response carrying one of these error codes means the target message is gone; timeouts or crashes do not.
  */
+/** Feishu's generic refusal, which `--reply-in-thread` on a message already inside a topic produces. */
+const refusedThreading = (error: unknown): boolean => error instanceof CliError && error.code === 2200
 const gone = (error: unknown): boolean => error instanceof CliError && error.code !== undefined && (error.code === 230011
   || /withdrawn/i.test(error.message) || (Math.floor(error.code / 100) === 2300 && /not found/i.test(error.message)))
 /**
@@ -38,11 +40,16 @@ export async function sendFeishu(host: Pick<SourceContext, 'commands'>, message:
   const messageId = message.channel.address.messageId
   if (!messageId) throw new Error('Missing Feishu reply target')
   const text = checkedImText(feishuReplyText(message))
-  const reply = ['im', '+messages-reply', '--message-id', messageId, '--markdown', text, '--reply-in-thread', '--idempotency-key', message.id]
+  // `--reply-in-thread` starts a topic on a top-level message, but Feishu rejects it with 2200 when the target already sits
+  // in one; a plain reply lands in that same topic, so the flag is skipped there and dropped entirely when it is refused.
+  const threaded = message.channel.address.threaded === 'true'
+  const reply = ['im', '+messages-reply', '--message-id', messageId, '--markdown', text, ...threaded ? [] : ['--reply-in-thread'],
+    '--idempotency-key', message.id]
   try { await host.commands.lark(reply) }
   catch (error) {
     if (gone(error)) return 'gone'
-    throw error
+    if (threaded || !refusedThreading(error)) throw error
+    await host.commands.lark(['im', '+messages-reply', '--message-id', messageId, '--markdown', text, '--idempotency-key', `${message.id}-plain`])
   }
   return 'sent'
 }
