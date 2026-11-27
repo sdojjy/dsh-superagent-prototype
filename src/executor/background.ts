@@ -161,5 +161,6 @@ export async function stopBackground(ctx: Context, sessionId: string, reason: st
   await killJobs(ctx, sessionId, reason).catch((error: unknown) => { failures.push(error) })
   const agent = ctx.agents.get(sessionId as SessionId)
   if (agent) await stopSubagents(ctx, agent, keepInbox).catch((error: unknown) => { failures.push(error) })
-  if (failures.length) throw new AggregateError(failures, `Stopping the background work of ${sessionId} failed`)
+  if (failures.length) throw new AggregateError(failures,
+    `Stopping the background work of ${sessionId} failed: ${failures.map(failure => String(failure)).join('; ')}`)
 }
