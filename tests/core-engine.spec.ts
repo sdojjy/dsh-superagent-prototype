@@ -11,6 +11,7 @@ function trigger(id: string, overrides: Partial<Trigger> = {}): Trigger {
 interface Hooks {
   emit?: (event: { type: string; data: Record<string, unknown> }) => void
   prepareTicket?: EngineOptions['prepareTicket']
+  acknowledgements?: boolean
 }
 function harness(policyOverrides: Partial<Policy> = {}, { emit, prepareTicket, acknowledgements }: Hooks = {}) {
   const repo = new MemoryRepositories()
