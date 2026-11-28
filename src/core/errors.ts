@@ -28,6 +28,7 @@ export const USER_ERRORS = {
   handedBackHere: ['refused', 'The worker of this ticket handed that trigger back as beyond it: accept it as new work, attach it to another ticket, or ignore it'],
   workerDecides: ['refused', 'This message reached ticket {tickets} on its thread: its worker decides whether it belongs there and hands back what does not, which then arrives as a candidate. Only a stop goes through orchestrator_route, with kind stop'],
   ackNoChannel: ['refused', 'Acknowledgement requires an assigned human source message'],
+  ackOff: ['refused', 'This installation sends no acknowledgements; the result is the only message a person receives'],
   ackNotPerson: ['refused', 'Use the original human trigger, not a bot, CI or worker report'],
   notReady: ['refused', 'Ticket is not ready for delivery. Keep progress internal and wait for a verified ready report; do not relabel progress as an answer or send it through another channel.'],
   notAttention: ['refused', 'Attention requires the ticket\'s current attention question in human_action. Routine unfinished work stays internal.'],

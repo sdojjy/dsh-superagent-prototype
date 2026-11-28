@@ -12,7 +12,7 @@ interface Hooks {
   emit?: (event: { type: string; data: Record<string, unknown> }) => void
   prepareTicket?: EngineOptions['prepareTicket']
 }
-function harness(policyOverrides: Partial<Policy> = {}, { emit, prepareTicket }: Hooks = {}) {
+function harness(policyOverrides: Partial<Policy> = {}, { emit, prepareTicket, acknowledgements }: Hooks = {}) {
   const repo = new MemoryRepositories()
   const outbox: OutboundMessage[] = []
   const withdrawn: string[] = []
@@ -41,7 +41,8 @@ function harness(policyOverrides: Partial<Policy> = {}, { emit, prepareTicket }:
     withdraw: id => { withdrawn.push(id) },
   }
   const engine = new Engine({ repo, scope, policy: () => policy, assessor, executor, outbox: queued,
-    ...emit ? { emit } : {}, ...prepareTicket ? { prepareTicket } : {}, now: () => new Date(Date.UTC(2026, 8, 23, 0, 0, clock)).toISOString() })
+    ...acknowledgements === undefined ? {} : { acknowledgements }, ...emit ? { emit } : {}, ...prepareTicket ? { prepareTicket } : {},
+    now: () => new Date(Date.UTC(2026, 8, 23, 0, 0, clock)).toISOString() })
   /** Simulate the executor starting queued assignments (unless `launch` is false) and delivering pending ticket inputs. */
   function settle({ launch = true } = {}) {
     for (;;) {
@@ -132,6 +133,16 @@ describe('eval', () => {
     const second = h.requests[1]!
     expect(() => h.decide(first, { kind: 'ignore', reason: 'chatter' })).toThrow('has finished or a later eval replaced it')
     expect(h.decide(second, { kind: 'ignore', reason: 'chatter' })).toMatchObject({ kind: 'ignore', evalId: second.evalId })
+  })
+  it('queues no acknowledgement when the installation turned them off, and refuses the worker\'s own', () => {
+    const h = harness({}, { acknowledgements: false })
+    h.engine.receive(trigger('1')); h.pump()
+    const decision = h.decide(h.requests[0]!, { kind: 'accept', title: 'Fix', scope: 'small', reason: 'requested', acknowledgement: 'ok' })
+    h.settle()
+    expect(h.outbox).toEqual([])
+    const ticket = h.repo.tickets.get(h.repo.tickets.list().at(-1)!.id)!
+    expect(decision.kind).toBe('accept')
+    expect(() => h.engine.reply({ purpose: 'acknowledgement', ticketId: ticket.id, triggerId: '1', text: 'On it' })).toThrow()
   })
   it('records an accept with its ticket, subscriptions and acknowledgement together, or none of them', async () => {
     const h = harness({}, { prepareTicket: () => { throw new Error('No directory for the ticket') } })

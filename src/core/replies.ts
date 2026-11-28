@@ -41,8 +41,11 @@ export class Replies extends EnginePart {
    * and a person wrote it.
    */
   acknowledgeAccepted(ticketId: string, trigger: Trigger, text: string): void {
+    if (!this.acknowledgements() && trigger.channel && trigger.human) return
     if (trigger.channel && trigger.human) this.options.outbox.send({ id: key('ack', trigger.id), channel: trigger.channel, text, kind: 'acknowledgement', ticketId })
   }
+  /** Whether this installation tells people that their request started, which the operator can turn off. */
+  private acknowledgements(): boolean { return this.options.acknowledgements !== false }
   /** Withdraw a ticket's question for a person from the outbox, unless it went out already. */
   withdrawAttention(attentionId: string): void { this.options.outbox.withdraw(key('attention-reply', attentionId)) }
   private acknowledge(request: Extract<ReplyRequest, { purpose: 'acknowledgement' }>): Reply {
@@ -53,6 +56,7 @@ export class Replies extends EnginePart {
     // Context-only threads are read-only and cannot receive acknowledgements.
     if (!this.reaches(ticket, trigger, false)) throw new UserError('notReached')
     if (!trigger.channel) throw new UserError('ackNoChannel')
+    if (!this.acknowledgements()) throw new UserError('ackOff')
     const id = key('ack', trigger.id)
     const existing = this.options.outbox.status(id)
     if (!existing && !trigger.human) throw new UserError('ackNotPerson')

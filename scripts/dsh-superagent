@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Manage a local dsh-superagent service (one DSH profile, default `superagent`) without affecting other tmux sessions.
 
+`restart` exits 4 instead when tickets are running and `--force` was not passed, because a restart stops them.
 `status`, `start`, and `restart` exit 0 while the service runs normally; 1 when it is stopped, duplicated, unreachable, or
 reporting a runtime error, which `restart` may fix; 2 when it runs while a component such as a Source reports an error;
 and 3 when it runs and waits for setup. A restart fixes neither 2 nor 3: they need a person.
@@ -244,6 +245,17 @@ def clone_of(directory):
     return common.resolve().parent
 
 
+def running_tickets(args) -> int:
+    """Return how many tickets the running service reports as working, so a restart does not stop them by accident."""
+    request = urllib.request.Request(args.url.rstrip('/') + '/orchestrator/api/state',
+                                     headers={'x-orchestrator-request': '1'})
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            return int((json.load(response).get('load') or {}).get('running') or 0)
+    except (OSError, ValueError, AttributeError, TypeError):
+        return 0
+
+
 def prune(args):
     """Remove the worktrees, branches and refs of ended Tickets, which a later resume recreates through its prepare command."""
     removed, kept = 0, 0
@@ -287,6 +299,8 @@ def main():
     parser.add_argument('--respect-stop', action='store_true',
                         help='For monitoring: never start/restart after an intentional stop.')
     parser.add_argument('--dry-run', action='store_true', help='With prune: list the worktrees it would remove.')
+    parser.add_argument('--force', action='store_true',
+                        help='Restart even while tickets run; a restart stops them and their workers start over.')
     args = parser.parse_args()
     if args.timeout <= 0 or args.stop_timeout <= 0:
         parser.error('--timeout and --stop-timeout must be positive')
@@ -305,6 +319,12 @@ def main():
             return status(args)
         if args.action == 'prune':
             return prune(args)
+        if args.action == 'restart' and not args.force:
+            busy = running_tickets(args)
+            if busy:
+                print(f'{busy} ticket(s) are running: a restart stops them and their workers start over.'
+                      ' Wait for them to end, or pass --force.', file=sys.stderr)
+                return 4
         if args.action in ('stop', 'restart'):
             # Only a stop keeps automatic recovery off; a restart whose stop timed out leaves it on.
             stop(args, intentional=args.action == 'stop')

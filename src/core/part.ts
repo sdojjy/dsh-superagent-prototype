@@ -12,6 +12,8 @@ export interface EngineOptions {
   assessor: Assessor
   executor: Executor
   outbox: Outbox
+  /** False keeps every acknowledgement out of the outbox, whatever the assessment decided. */
+  acknowledgements?: boolean
   prepareTicket?: (ticket: Ticket, outcome: Extract<AssessmentOutcome, { kind: 'accept' }>) => Ticket
   now?: () => string
   emit?: (event: DomainEvent) => void
